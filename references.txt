@@ -1,0 +1,9 @@
+1. Fast Allocation and Deallocation with an Improved Buddy System
+	https://cs.au.dk/~gerth/papers/actainformatica05.pdf
+	comments: no scheme inside, too formal for me
+	implemented?: no
+
+2. A Non-blocking Buddy System for Scalable Memory Allocation on Multi-core Machines
+	https://www.researchgate.net/publication/324435676_A_Non-blocking_Buddy_System_for_Scalable_Memory_Allocation_on_Multi-core_Machines
+	comments: 
+	implemented?:
