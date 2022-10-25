@@ -2,15 +2,11 @@
 
 use core::arch::asm;
 
-const NB_GB: usize = 2; // 2Gb memory
-                        //const NB_PAGES: usize = 512 * 512 * NB_GB;
+const NB_GB: usize = 2;
+//const NB_PAGES: usize = 512 * 512 * NB_GB;
 const TREE_4KB_SIZE: usize = 8209;
 const TREE_2MB_SIZE: usize = 17;
 const TREE_1GB_SIZE: usize = 1; // TODO change that to upper log64(x)
-
-//static mut TREE_4KB: [u64; TREE_4KB_SIZE] = [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE];
-//static mut TREE_2MB: [u64; TREE_2MB_SIZE] = [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE];
-//static mut TREE_1GB: [u64; TREE_1GB_SIZE] = [0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE];
 
 pub struct BuddyAllocator {
     tree_4kb: [u64; TREE_4KB_SIZE],
@@ -20,15 +16,12 @@ pub struct BuddyAllocator {
 
 impl BuddyAllocator {
     pub fn new() -> Self {
-        Self::init();
         Self {
             tree_4kb: [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE],
             tree_2mb: [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE],
             tree_1gb: [0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE],
         }
     }
-
-    pub fn init() {}
 
     fn bsf(input: u64) -> usize {
         assert!(input > 0);
@@ -92,11 +85,19 @@ impl BuddyAllocator {
                 self.tree_4kb[0] &= !(1u64 << l1_idx);
             }
         }
-        
 
         // set bits from TREE_1GB and TREE_2MB to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
-        self.tree_2mb[0] &= !(1u64 << l1_idx);
+        let mut need_to_set_mb_level1 = true;
+        for i in 0..8 {
+            if self.tree_2mb[first_block_l2 + i] != 0 {
+                need_to_set_mb_level1 = false;
+                break;
+            }
+        }
+        if need_to_set_mb_level1 {
+            self.tree_2mb[0] &= !(1u64 << l1_idx);
+        }
         self.tree_1gb[0] &= !(1u64 << l1_idx);
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
@@ -107,14 +108,63 @@ impl BuddyAllocator {
      * Allocates 2Mb page
      */
     pub fn allocate_big_page(&mut self) -> Option<usize> {
-        None
+        // First level search
+        if self.tree_2mb[0] == 0 {
+            return None;
+        }
+        let l1_idx = Self::bsf(self.tree_2mb[0]);
+        if l1_idx >= NB_GB {
+            return None;
+        }
+
+        // Second level search
+        let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
+        let mut block_chosen_l2 = 8;
+        for i in 0..8 {
+            if self.tree_2mb[first_block_l2 + i] != 0 {
+                block_chosen_l2 = i;
+                break;
+            }
+        }
+        assert!(block_chosen_l2 < 8);
+        assert!(self.tree_2mb[first_block_l2 + block_chosen_l2] != 0u64);
+        let l2_idx =
+            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
+
+        // Set bits to 0
+        self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        // if block is full set upper level to 0
+        if l2_idx == 511 {
+            self.tree_2mb[0] &= !(1u64 << l1_idx);
+        }
+
+        // set bits from TREE_1GB and TREE_4KB to 0
+        self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        self.tree_1gb[0] &= !(1u64 << l1_idx);
+
+        let final_idx = 512 * 512 * l1_idx + 512 * l2_idx;
+        Some(final_idx)
     }
 
     /**
      * Allocates 1Gb page
      */
     pub fn allocate_huge_page(&mut self) -> Option<usize> {
-        None
+        // First level search
+        if self.tree_1gb[0] == 0 {
+            return None;
+        }
+        let l1_idx = Self::bsf(self.tree_1gb[0]);
+        if l1_idx >= NB_GB {
+            return None;
+        }
+
+        self.tree_1gb[0] &= !(1u64 << l1_idx);
+        self.tree_2mb[0] &= !(1u64 << l1_idx);
+        self.tree_4kb[0] &= !(1u64 << l1_idx);
+
+        let final_idx = 512 * 512 * l1_idx;
+        return Some(final_idx);
     }
 
     pub unsafe fn deallocate_frame(&mut self, frame_id: usize) {
@@ -164,9 +214,65 @@ impl BuddyAllocator {
         }
     }
 
-    pub fn deallocate_big_page(&mut self, frame_id: usize) {}
+    pub fn deallocate_big_page(&mut self, frame_id: usize) {
+        let mut id = frame_id;
 
-    pub fn deallocate_huge_page(&mut self, frame_id: usize) {}
+        let l3_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l2_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l1_block_idx = id & 0x1FF;
+        assert!(l3_block_idx == 0); // l3_block_idx must be 0 for 2mb pages
+
+        let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
+        self.tree_2mb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
+        self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
+
+        self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
+        self.tree_4kb[0] |= 1u64 << l1_block_idx;
+
+        let mut need_to_free_1gb_level1 = true;
+        let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
+        for i in 0..8 {
+            if self.tree_2mb[first_block_l2 + i] != 0u64 {
+                need_to_free_1gb_level1 = false;
+                break;
+            }
+        }
+        if need_to_free_1gb_level1 {
+            self.tree_1gb[0] |= 1u64 << l1_block_idx;
+        }
+
+        let mut need_to_free_1gb_level1 = true;
+        let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
+        for i in 0..8 {
+            if self.tree_2mb[first_block_l2 + i] != 0u64 {
+                need_to_free_1gb_level1 = false;
+                break;
+            }
+        }
+        if need_to_free_1gb_level1 {
+            self.tree_1gb[0] |= 1u64 << (l1_block_idx % 64);
+        }
+    }
+
+    pub fn deallocate_huge_page(&mut self, frame_id: usize) {
+        let mut id = frame_id;
+
+        let l3_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l2_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l1_block_idx = id & 0x1FF;
+        assert!(l3_block_idx == 0); // l3_block_idx must be 0 for 1gb pages
+        assert!(l2_block_idx == 0); // l2_block_idx must be 0 for 1gb pages
+
+        let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
+        self.tree_1gb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        self.tree_2mb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        self.tree_4kb[l1_tree_idx] |= 1u64 << l1_block_idx;
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +318,87 @@ mod tests {
 
         assert_ne!(frame1.as_ref().unwrap(), frame2.as_ref().unwrap());
         assert_ne!(frame1.as_ref().unwrap(), frame2.as_ref().unwrap());
+    }
+
+    #[test]
+    fn test_alloc_and_dealloc_big_several_times() {
+        let mut frame_alloc = BuddyAllocator::new();
+        for _ in 0..NB_PAGES {
+            let new_frame = frame_alloc.allocate_big_page();
+            assert!(new_frame.is_some());
+            unsafe { frame_alloc.deallocate_big_page(new_frame.unwrap()) };
+        }
+    }
+
+    #[test]
+    fn test_alloc_and_dealloc_huge_several_times() {
+        let mut frame_alloc = BuddyAllocator::new();
+        for _ in 0..NB_PAGES {
+            let new_frame = frame_alloc.allocate_huge_page();
+            assert!(new_frame.is_some());
+            unsafe { frame_alloc.deallocate_huge_page(new_frame.unwrap()) };
+        }
+    }
+
+    #[test]
+    fn test_allocate_different_types() {
+        let mut frame_alloc = BuddyAllocator::new();
+        let frame = frame_alloc.allocate_frame();
+        assert!(frame.is_some());
+        let big_page = frame_alloc.allocate_big_page();
+        assert!(big_page.is_some());
+        let huge_page = frame_alloc.allocate_huge_page();
+        assert!(huge_page.is_some());
+
+        assert_ne!(frame.unwrap(), big_page.unwrap());
+        assert_ne!(frame.unwrap(), huge_page.unwrap());
+        assert_ne!(big_page.unwrap(), huge_page.unwrap());
+    }
+
+    #[test]
+    fn test_fill_memory_with_frame_and_big() {
+        let mut frame_alloc = BuddyAllocator::new();
+
+        for i in 0..NB_PAGES/512 {
+            if i%2 == 0 {
+                let big_page = frame_alloc.allocate_big_page();
+                assert!(big_page.is_some());
+            } else {
+                for _ in 0..512 {
+                    let frame = frame_alloc.allocate_frame();
+                    assert!(frame.is_some());
+                }
+            }
+        }
+
+        // assert memory is full
+        let frame = frame_alloc.allocate_frame();
+        assert!(frame.is_none());
+        let big_page = frame_alloc.allocate_big_page();
+        assert!(big_page.is_none());
+        let huge_page = frame_alloc.allocate_huge_page();
+        assert!(huge_page.is_none());
+    }
+
+    #[test]
+    fn test_alloc_and_free_with_all_types() {
+        let mut frame_alloc = BuddyAllocator::new();
+
+        // assert memory is full
+        let frame = frame_alloc.allocate_frame();
+        assert!(frame.is_some());
+        let big_page = frame_alloc.allocate_big_page();
+        assert!(big_page.is_some());
+        let mut huge_page = frame_alloc.allocate_huge_page();
+        assert!(huge_page.is_some());
+        for _ in 0..NB_GB-2 {
+            huge_page = frame_alloc.allocate_huge_page();
+            assert!(huge_page.is_some());
+        }
+        let huge_page1 = frame_alloc.allocate_huge_page();
+        assert!(huge_page1.is_none());
+        frame_alloc.deallocate_huge_page(huge_page.unwrap());
+        let huge_page2 = frame_alloc.allocate_huge_page();
+        assert!(huge_page2.is_some());
     }
 }
