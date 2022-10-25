@@ -1,0 +1,216 @@
+//! Revisited buddy allocator
+
+use core::arch::asm;
+
+const NB_GB: usize = 2; // 2Gb memory
+                        //const NB_PAGES: usize = 512 * 512 * NB_GB;
+const TREE_4KB_SIZE: usize = 8209;
+const TREE_2MB_SIZE: usize = 17;
+const TREE_1GB_SIZE: usize = 1; // TODO change that to upper log64(x)
+
+//static mut TREE_4KB: [u64; TREE_4KB_SIZE] = [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE];
+//static mut TREE_2MB: [u64; TREE_2MB_SIZE] = [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE];
+//static mut TREE_1GB: [u64; TREE_1GB_SIZE] = [0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE];
+
+pub struct BuddyAllocator {
+    tree_4kb: [u64; TREE_4KB_SIZE],
+    tree_2mb: [u64; TREE_2MB_SIZE],
+    tree_1gb: [u64; TREE_1GB_SIZE],
+}
+
+impl BuddyAllocator {
+    pub fn new() -> Self {
+        Self::init();
+        Self {
+            tree_4kb: [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE],
+            tree_2mb: [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE],
+            tree_1gb: [0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE],
+        }
+    }
+
+    pub fn init() {}
+
+    fn bsf(input: u64) -> usize {
+        assert!(input > 0);
+        let mut pos: usize;
+        unsafe {
+            asm! {
+                "bsf {pos}, {input}",
+                input = in(reg) input,
+                pos = out(reg) pos,
+                options(nomem, nostack),
+            };
+        };
+        assert!(pos < 64);
+        pos
+    }
+
+    pub fn allocate_frame(&mut self) -> Option<usize> {
+        // First level search
+        if self.tree_4kb[0] == 0 {
+            return None;
+        }
+        let l1_idx = Self::bsf(self.tree_4kb[0]);
+        if l1_idx >= NB_GB {
+            return None;
+        }
+
+        // Second level search
+        let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
+        let mut block_chosen_l2 = 8;
+        for i in 0..8 {
+            if self.tree_4kb[first_block_l2 + i] != 0 {
+                block_chosen_l2 = i;
+                break;
+            }
+        }
+        assert!(block_chosen_l2 < 8);
+        assert!(self.tree_4kb[first_block_l2 + block_chosen_l2] != 0u64);
+        let l2_idx =
+            Self::bsf(self.tree_4kb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
+
+        // Third level search
+        let first_block_l3 = TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx;
+        let mut block_chosen_l3 = 8;
+        for j in 0..8 {
+            if self.tree_4kb[first_block_l3 + j] != 0u64 {
+                block_chosen_l3 = j;
+                break;
+            }
+        }
+        assert!(block_chosen_l3 < 8);
+        assert!(self.tree_4kb[first_block_l3 + block_chosen_l3] != 0);
+        let l3_idx =
+            Self::bsf(self.tree_4kb[first_block_l3 + block_chosen_l3]) + 64 * block_chosen_l3;
+
+        // Set bits to 0
+        self.tree_4kb[first_block_l3 + block_chosen_l3] &= !(1u64 << (l3_idx % 64));
+        // if block is full set upper level to 0
+        if l3_idx == 511 {
+            self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+            if l2_idx == 511 {
+                self.tree_4kb[0] &= !(1u64 << l1_idx);
+            }
+        }
+        
+
+        // set bits from TREE_1GB and TREE_2MB to 0
+        self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        self.tree_2mb[0] &= !(1u64 << l1_idx);
+        self.tree_1gb[0] &= !(1u64 << l1_idx);
+
+        let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
+        Some(final_idx)
+    }
+
+    /**
+     * Allocates 2Mb page
+     */
+    pub fn allocate_big_page(&mut self) -> Option<usize> {
+        None
+    }
+
+    /**
+     * Allocates 1Gb page
+     */
+    pub fn allocate_huge_page(&mut self) -> Option<usize> {
+        None
+    }
+
+    pub unsafe fn deallocate_frame(&mut self, frame_id: usize) {
+        let mut id = frame_id;
+
+        let l3_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l2_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l1_block_idx = id & 0x1FF;
+
+        // TODO check that frame was previously allocated
+        let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
+        self.tree_4kb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
+        self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
+        let l3_tree_idx = TREE_1GB_SIZE
+            + 8 * NB_GB
+            + 512 * 8 * l1_block_idx
+            + 8 * l2_block_idx
+            + l3_block_idx / 64;
+        self.tree_4kb[l3_tree_idx] |= 1u64 << (l3_block_idx % 64);
+
+        let mut need_to_free_2mb_level2 = true;
+        let first_block_l3 = l3_tree_idx - l3_block_idx / 64;
+        for i in 0..8 {
+            if self.tree_4kb[first_block_l3 + i] != 0u64 {
+                need_to_free_2mb_level2 = false;
+                break;
+            }
+        }
+        if need_to_free_2mb_level2 {
+            self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
+            self.tree_2mb[0] |= 1u64 << l1_block_idx;
+        }
+
+        let mut need_to_free_1gb_level1 = true;
+        let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
+        for i in 0..8 {
+            if self.tree_2mb[first_block_l2 + i] != 0u64 {
+                need_to_free_1gb_level1 = false;
+                break;
+            }
+        }
+        if need_to_free_1gb_level1 {
+            self.tree_1gb[0] |= 1u64 << (l1_block_idx % 64);
+        }
+    }
+
+    pub fn deallocate_big_page(&mut self, frame_id: usize) {}
+
+    pub fn deallocate_huge_page(&mut self, frame_id: usize) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const NB_PAGES: usize = 512 * 512 * NB_GB;
+
+    #[test]
+    fn test_alloc_works() {
+        let mut frame_alloc = BuddyAllocator::new();
+        let new_frame = frame_alloc.allocate_frame();
+        assert!(new_frame.is_some());
+    }
+
+    #[test]
+    fn test_alloc_when_full() {
+        let mut frame_alloc = BuddyAllocator::new();
+        for _ in 0..NB_PAGES {
+            let new_frame = frame_alloc.allocate_frame();
+            assert!(new_frame.is_some());
+        }
+        let new_frame = frame_alloc.allocate_frame();
+        assert!(new_frame.is_none());
+    }
+
+    #[test]
+    fn test_alloc_and_dealloc_several_times() {
+        let mut frame_alloc = BuddyAllocator::new();
+        for _ in 0..NB_PAGES * 10 {
+            let new_frame = frame_alloc.allocate_frame();
+            assert!(new_frame.is_some());
+            unsafe { frame_alloc.deallocate_frame(new_frame.unwrap()) };
+        }
+    }
+
+    #[test]
+    fn test_two_allocated_frame_are_diff() {
+        let mut frame_alloc = BuddyAllocator::new();
+        let frame1 = frame_alloc.allocate_frame();
+        assert!(frame1.is_some());
+        let frame2 = frame_alloc.allocate_frame();
+        assert!(frame2.is_some());
+
+        assert_ne!(frame1.as_ref().unwrap(), frame2.as_ref().unwrap());
+        assert_ne!(frame1.as_ref().unwrap(), frame2.as_ref().unwrap());
+    }
+}
