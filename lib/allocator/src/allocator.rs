@@ -2,16 +2,26 @@
 
 use std::arch::asm;
 
-const NB_GB: usize = 4;
-//const NB_PAGES: usize = 512 * 512 * NB_GB;
+const NB_GB: usize = 8;
+const NB_PAGES: usize = 512 * 512 * NB_GB;
 const TREE_1GB_SIZE: usize = NB_GB / 64 + if NB_GB % 64 != 0 { 1 } else { 0 }; // just a ceil
 const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;
 const TREE_4KB_SIZE: usize = TREE_2MB_SIZE + NB_GB * 512 * 512 / 64;
 
+#[derive(Copy, Clone, PartialEq)]
+enum PageType {
+    Free,
+    Frame,
+    Big,
+    Huge,
+}
+
+// TODO generic const <const N>
 pub struct BuddyAllocator {
     tree_4kb: [u64; TREE_4KB_SIZE],
     tree_2mb: [u64; TREE_2MB_SIZE],
     tree_1gb: [u64; TREE_1GB_SIZE],
+    allocator_state: [PageType; NB_PAGES],
 }
 
 impl BuddyAllocator {
@@ -20,9 +30,13 @@ impl BuddyAllocator {
             tree_4kb: [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE],
             tree_2mb: [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE],
             tree_1gb: [0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE],
+            allocator_state: [PageType::Free; NB_PAGES],
         }
     }
 
+    /**
+     * Bit Scan Forward
+     */
     fn bsf(input: u64) -> usize {
         assert!(input > 0);
         let mut pos: usize;
@@ -38,6 +52,9 @@ impl BuddyAllocator {
         pos
     }
 
+    /**
+     * Allocates 4kb page
+     */
     pub fn allocate_frame(&mut self) -> Option<usize> {
         // First level search
         if self.tree_4kb[0] == 0 {
@@ -101,6 +118,8 @@ impl BuddyAllocator {
         self.tree_1gb[0] &= !(1u64 << l1_idx);
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
+        assert!(self.allocator_state[final_idx] == PageType::Free);
+        self.allocator_state[final_idx] = PageType::Frame;
         Some(final_idx)
     }
 
@@ -154,6 +173,8 @@ impl BuddyAllocator {
         self.tree_1gb[0] &= !(1u64 << l1_idx);
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx;
+        assert!(self.allocator_state[final_idx] == PageType::Free);
+        self.allocator_state[final_idx] = PageType::Big;
         Some(final_idx)
     }
 
@@ -175,11 +196,22 @@ impl BuddyAllocator {
         self.tree_4kb[0] &= !(1u64 << l1_idx);
 
         let final_idx = 512 * 512 * l1_idx;
+        assert!(self.allocator_state[final_idx] == PageType::Free);
+        self.allocator_state[final_idx] = PageType::Huge;
         return Some(final_idx);
     }
 
+    /**
+     * Deallocates frame
+     * nothing is done if frame was not previously allocated
+     */
     pub fn deallocate_frame(&mut self, frame_id: usize) {
         let mut id = frame_id;
+        // return if frame was not allocated
+        if self.allocator_state[id] != PageType::Frame {
+            return;
+        }
+        self.allocator_state[id] = PageType::Free;
 
         let l3_block_idx = id & 0x1FF;
         id >>= 9;
@@ -225,8 +257,17 @@ impl BuddyAllocator {
         }
     }
 
+    /**
+     * Deallocates big page
+     * nothing is done if page was not previously allocated
+     */
     pub fn deallocate_big_page(&mut self, frame_id: usize) {
         let mut id = frame_id;
+        // return if big page was not allocated
+        if self.allocator_state[id] != PageType::Big {
+            return;
+        }
+        self.allocator_state[id] = PageType::Free;
 
         let l3_block_idx = id & 0x1FF;
         id >>= 9;
@@ -268,8 +309,17 @@ impl BuddyAllocator {
         }
     }
 
+    /**
+     * Deallocates huge page
+     * nothing is done if frame was not previously allocated
+     */
     pub fn deallocate_huge_page(&mut self, frame_id: usize) {
         let mut id = frame_id;
+        // return if huge page was not allocated
+        if self.allocator_state[id] != PageType::Huge {
+            return;
+        }
+        self.allocator_state[id] = PageType::Free;
 
         let l3_block_idx = id & 0x1FF;
         id >>= 9;
@@ -284,6 +334,36 @@ impl BuddyAllocator {
         self.tree_2mb[l1_tree_idx] |= 1u64 << l1_block_idx;
         self.tree_4kb[l1_tree_idx] |= 1u64 << l1_block_idx;
     }
+
+    /**
+     * Checks integrity of allocated pages
+     * crash if integrity is not ensured
+     */
+    #[cfg(test)]
+    pub fn check_integrity(&self) {
+        let mut num_next_free = 0;
+        for i in 0..NB_PAGES {
+            if num_next_free > 0 {
+                assert!(self.allocator_state[i] == PageType::Free);
+            } else {
+                match self.allocator_state[i] {
+                    PageType::Big => {
+                        assert!(i % 512 == 0);
+                        num_next_free = 511
+                    }
+                    PageType::Huge => {
+                        assert!(i % (512 * 512) == 0);
+                        num_next_free = 512 * 512 - 1
+                    }
+                    _ => (),
+                }
+            }
+            num_next_free -= 1;
+        }
+    }
+    // todo check integrity
+    // perf
+    // rust-gdb
 }
 
 #[cfg(test)]
@@ -293,39 +373,52 @@ mod tests {
 
     #[test]
     fn test_alloc_works() {
-        let mut frame_alloc = BuddyAllocator::new();
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
+        frame_alloc.check_integrity();
         let new_frame = frame_alloc.allocate_frame();
         assert!(new_frame.is_some());
+        frame_alloc.check_integrity();
     }
 
     #[test]
     fn test_alloc_when_full() {
-        let mut frame_alloc = BuddyAllocator::new();
-        for _ in 0..NB_PAGES {
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
+        for i in 0..NB_PAGES {
+            if i % 1000 == 0 {
+                frame_alloc.check_integrity();
+            }
             let new_frame = frame_alloc.allocate_frame();
             assert!(new_frame.is_some());
         }
+        frame_alloc.check_integrity();
         let new_frame = frame_alloc.allocate_frame();
         assert!(new_frame.is_none());
+        frame_alloc.check_integrity();
     }
 
     #[test]
     fn test_alloc_and_dealloc_several_times() {
-        let mut frame_alloc = BuddyAllocator::new();
-        for _ in 0..NB_PAGES * 10 {
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
+        for i in 0..NB_PAGES * 10 {
+            if i % 10000 == 0 {
+                frame_alloc.check_integrity();
+            }
             let new_frame = frame_alloc.allocate_frame();
             assert!(new_frame.is_some());
             frame_alloc.deallocate_frame(new_frame.unwrap());
         }
+        frame_alloc.check_integrity();
     }
 
     #[test]
     fn test_two_allocated_frame_are_diff() {
-        let mut frame_alloc = BuddyAllocator::new();
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
         let frame1 = frame_alloc.allocate_frame();
         assert!(frame1.is_some());
+        frame_alloc.check_integrity();
         let frame2 = frame_alloc.allocate_frame();
         assert!(frame2.is_some());
+        frame_alloc.check_integrity();
 
         assert_ne!(frame1.as_ref().unwrap(), frame2.as_ref().unwrap());
         assert_ne!(frame1.as_ref().unwrap(), frame2.as_ref().unwrap());
@@ -333,8 +426,11 @@ mod tests {
 
     #[test]
     fn test_alloc_and_dealloc_big_several_times() {
-        let mut frame_alloc = BuddyAllocator::new();
-        for _ in 0..NB_PAGES {
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
+        for i in 0..NB_PAGES {
+            if i % 1000 == 0 {
+                frame_alloc.check_integrity();
+            }
             let new_frame = frame_alloc.allocate_big_page();
             assert!(new_frame.is_some());
             frame_alloc.deallocate_big_page(new_frame.unwrap());
@@ -343,8 +439,11 @@ mod tests {
 
     #[test]
     fn test_alloc_and_dealloc_huge_several_times() {
-        let mut frame_alloc = BuddyAllocator::new();
-        for _ in 0..NB_PAGES {
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
+        for i in 0..NB_PAGES {
+            if i % 1000 == 0 {
+                frame_alloc.check_integrity();
+            }
             let new_frame = frame_alloc.allocate_huge_page();
             assert!(new_frame.is_some());
             frame_alloc.deallocate_huge_page(new_frame.unwrap());
@@ -353,13 +452,16 @@ mod tests {
 
     #[test]
     fn test_allocate_different_types() {
-        let mut frame_alloc = BuddyAllocator::new();
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
         let frame = frame_alloc.allocate_frame();
         assert!(frame.is_some());
+        frame_alloc.check_integrity();
         let big_page = frame_alloc.allocate_big_page();
         assert!(big_page.is_some());
+        frame_alloc.check_integrity();
         let huge_page = frame_alloc.allocate_huge_page();
         assert!(huge_page.is_some());
+        frame_alloc.check_integrity();
 
         assert_ne!(frame.unwrap(), big_page.unwrap());
         assert_ne!(frame.unwrap(), huge_page.unwrap());
@@ -368,9 +470,12 @@ mod tests {
 
     #[test]
     fn test_fill_memory_with_frame_and_big() {
-        let mut frame_alloc = BuddyAllocator::new();
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
 
         for i in 0..NB_PAGES / 512 {
+            if i % 100 == 0 {
+                frame_alloc.check_integrity();
+            }
             if i % 2 == 0 {
                 let big_page = frame_alloc.allocate_big_page();
                 assert!(big_page.is_some());
@@ -381,6 +486,7 @@ mod tests {
                 }
             }
         }
+        frame_alloc.check_integrity();
 
         // assert memory is full
         let frame = frame_alloc.allocate_frame();
@@ -389,22 +495,27 @@ mod tests {
         assert!(big_page.is_none());
         let huge_page = frame_alloc.allocate_huge_page();
         assert!(huge_page.is_none());
+        frame_alloc.check_integrity();
     }
 
     #[test]
     fn test_alloc_and_free_with_all_types() {
-        let mut frame_alloc = BuddyAllocator::new();
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
 
         let frame = frame_alloc.allocate_frame();
         assert!(frame.is_some());
+        frame_alloc.check_integrity();
         let big_page = frame_alloc.allocate_big_page();
         assert!(big_page.is_some());
+        frame_alloc.check_integrity();
         let mut huge_page = frame_alloc.allocate_huge_page();
         assert!(huge_page.is_some());
+        frame_alloc.check_integrity();
         for _ in 0..NB_GB - 2 {
             huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_some());
         }
+        frame_alloc.check_integrity();
         let huge_page1 = frame_alloc.allocate_huge_page();
         assert!(huge_page1.is_none());
         frame_alloc.deallocate_huge_page(huge_page.unwrap());
@@ -414,11 +525,12 @@ mod tests {
         assert!(big_page1.is_some());
         let frame1 = frame_alloc.allocate_frame();
         assert!(frame1.is_some());
+        frame_alloc.check_integrity();
     }
 
     #[test]
     fn test_dealloc_when_full() {
-        let mut frame_alloc = BuddyAllocator::new();
+        let mut frame_alloc = Box::new(BuddyAllocator::new());
 
         for _ in 0..2 {
             // allocates all possible frames
@@ -426,6 +538,7 @@ mod tests {
                 let frame = frame_alloc.allocate_frame();
                 assert!(frame.is_some());
             }
+            frame_alloc.check_integrity();
             let frame = frame_alloc.allocate_frame();
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
@@ -436,12 +549,14 @@ mod tests {
             for i in 0..NB_PAGES {
                 frame_alloc.deallocate_frame(i);
             }
+            frame_alloc.check_integrity();
 
             // allocates all possible big pages
             for _ in 0..NB_PAGES / 512 {
                 let big_page = frame_alloc.allocate_big_page();
                 assert!(big_page.is_some());
             }
+            frame_alloc.check_integrity();
             let frame = frame_alloc.allocate_frame();
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
@@ -452,12 +567,14 @@ mod tests {
             for i in 0..NB_PAGES / 512 {
                 frame_alloc.deallocate_big_page(i * 512);
             }
+            frame_alloc.check_integrity();
 
             // allocates all possible big pages
             for _ in 0..NB_GB {
                 let huge_page = frame_alloc.allocate_huge_page();
                 assert!(huge_page.is_some());
             }
+            frame_alloc.check_integrity();
             let frame = frame_alloc.allocate_frame();
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
@@ -468,12 +585,14 @@ mod tests {
             for i in 0..NB_GB {
                 frame_alloc.deallocate_huge_page(i * 512 * 512);
             }
+            frame_alloc.check_integrity();
 
             // allocates all possible frames
             for _ in 0..NB_PAGES {
                 let frame = frame_alloc.allocate_frame();
                 assert!(frame.is_some());
             }
+            frame_alloc.check_integrity();
             let frame = frame_alloc.allocate_frame();
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
@@ -484,12 +603,14 @@ mod tests {
             for i in 0..NB_PAGES {
                 frame_alloc.deallocate_frame(i);
             }
+            frame_alloc.check_integrity();
 
             // allocates all possible big pages
             for _ in 0..NB_GB {
                 let huge_page = frame_alloc.allocate_huge_page();
                 assert!(huge_page.is_some());
             }
+            frame_alloc.check_integrity();
             let frame = frame_alloc.allocate_frame();
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
@@ -500,12 +621,14 @@ mod tests {
             for i in 0..NB_GB {
                 frame_alloc.deallocate_huge_page(i * 512 * 512);
             }
+            frame_alloc.check_integrity();
 
             // allocates all possible big pages
             for _ in 0..NB_PAGES / 512 {
                 let big_page = frame_alloc.allocate_big_page();
                 assert!(big_page.is_some());
             }
+            frame_alloc.check_integrity();
             let frame = frame_alloc.allocate_frame();
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
@@ -516,6 +639,7 @@ mod tests {
             for i in 0..NB_PAGES / 512 {
                 frame_alloc.deallocate_big_page(i * 512);
             }
+            frame_alloc.check_integrity();
         }
     }
 }
