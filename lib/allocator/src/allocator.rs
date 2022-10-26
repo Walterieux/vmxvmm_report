@@ -1,12 +1,12 @@
 //! Revisited buddy allocator
 
-use core::arch::asm;
+use std::arch::asm;
 
-const NB_GB: usize = 2;
+const NB_GB: usize = 4;
 //const NB_PAGES: usize = 512 * 512 * NB_GB;
-const TREE_4KB_SIZE: usize = 8209;
-const TREE_2MB_SIZE: usize = 17;
-const TREE_1GB_SIZE: usize = 1; // TODO change that to upper log64(x)
+const TREE_1GB_SIZE: usize = NB_GB / 64 + if NB_GB % 64 != 0 { 1 } else { 0 }; // just a ceil
+const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;
+const TREE_4KB_SIZE: usize = TREE_2MB_SIZE + NB_GB * 512 * 512 / 64;
 
 pub struct BuddyAllocator {
     tree_4kb: [u64; TREE_4KB_SIZE],
