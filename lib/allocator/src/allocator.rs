@@ -315,7 +315,7 @@ mod tests {
         for _ in 0..NB_PAGES * 10 {
             let new_frame = frame_alloc.allocate_frame();
             assert!(new_frame.is_some());
-            unsafe { frame_alloc.deallocate_frame(new_frame.unwrap()) };
+            frame_alloc.deallocate_frame(new_frame.unwrap());
         }
     }
 
@@ -337,7 +337,7 @@ mod tests {
         for _ in 0..NB_PAGES {
             let new_frame = frame_alloc.allocate_big_page();
             assert!(new_frame.is_some());
-            unsafe { frame_alloc.deallocate_big_page(new_frame.unwrap()) };
+            frame_alloc.deallocate_big_page(new_frame.unwrap());
         }
     }
 
@@ -347,7 +347,7 @@ mod tests {
         for _ in 0..NB_PAGES {
             let new_frame = frame_alloc.allocate_huge_page();
             assert!(new_frame.is_some());
-            unsafe { frame_alloc.deallocate_huge_page(new_frame.unwrap()) };
+            frame_alloc.deallocate_huge_page(new_frame.unwrap());
         }
     }
 
@@ -422,7 +422,7 @@ mod tests {
 
         for _ in 0..2 {
             // allocates all possible frames
-            for i in 0..NB_PAGES {
+            for _ in 0..NB_PAGES {
                 let frame = frame_alloc.allocate_frame();
                 assert!(frame.is_some());
             }
@@ -430,7 +430,7 @@ mod tests {
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
             assert!(big_page.is_none());
-            let mut huge_page = frame_alloc.allocate_huge_page();
+            let huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_none());
             // deallocates all frames
             for i in 0..NB_PAGES {
@@ -446,7 +446,7 @@ mod tests {
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
             assert!(big_page.is_none());
-            let mut huge_page = frame_alloc.allocate_huge_page();
+            let huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_none());
             // deallocates all big pages
             for i in 0..NB_PAGES / 512 {
@@ -462,7 +462,7 @@ mod tests {
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
             assert!(big_page.is_none());
-            let mut huge_page = frame_alloc.allocate_huge_page();
+            let huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_none());
             // deallocates all big pages
             for i in 0..NB_GB {
@@ -470,7 +470,7 @@ mod tests {
             }
 
             // allocates all possible frames
-            for i in 0..NB_PAGES {
+            for _ in 0..NB_PAGES {
                 let frame = frame_alloc.allocate_frame();
                 assert!(frame.is_some());
             }
@@ -478,7 +478,7 @@ mod tests {
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
             assert!(big_page.is_none());
-            let mut huge_page = frame_alloc.allocate_huge_page();
+            let huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_none());
             // deallocates all frames
             for i in 0..NB_PAGES {
@@ -494,7 +494,7 @@ mod tests {
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
             assert!(big_page.is_none());
-            let mut huge_page = frame_alloc.allocate_huge_page();
+            let huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_none());
             // deallocates all big pages
             for i in 0..NB_GB {
@@ -510,7 +510,7 @@ mod tests {
             assert!(frame.is_none());
             let big_page = frame_alloc.allocate_big_page();
             assert!(big_page.is_none());
-            let mut huge_page = frame_alloc.allocate_huge_page();
+            let huge_page = frame_alloc.allocate_huge_page();
             assert!(huge_page.is_none());
             // deallocates all big pages
             for i in 0..NB_PAGES / 512 {
