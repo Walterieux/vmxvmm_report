@@ -54,8 +54,10 @@ impl BuddyAllocator {
 
     /**
      * Allocates 4kb page
+     * return None if allocation fails
      */
     pub fn allocate_frame(&mut self) -> Option<usize> {
+        assert!(std::mem::size_of::<PageType>() == 1);
         // First level search
         if self.tree_4kb[0] == 0 {
             return None;
@@ -125,6 +127,7 @@ impl BuddyAllocator {
 
     /**
      * Allocates 2Mb page
+     * return None if allocation fails
      */
     pub fn allocate_big_page(&mut self) -> Option<usize> {
         // First level search
@@ -180,6 +183,7 @@ impl BuddyAllocator {
 
     /**
      * Allocates 1Gb page
+     * return None if allocation fails
      */
     pub fn allocate_huge_page(&mut self) -> Option<usize> {
         // First level search
@@ -339,7 +343,7 @@ impl BuddyAllocator {
      * Checks integrity of allocated pages
      * crash if integrity is not ensured
      */
-    #[cfg(test)]
+    // #[cfg(test)]
     pub fn check_integrity(&self) {
         let mut num_next_free = 0;
         for i in 0..NB_PAGES {
@@ -361,6 +365,7 @@ impl BuddyAllocator {
             num_next_free -= 1;
         }
     }
+    
     // todo check integrity
     // perf
     // rust-gdb

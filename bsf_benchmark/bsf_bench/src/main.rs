@@ -7,6 +7,7 @@ extern crate test;
 use core::arch::asm;
 use csv::Writer;
 use std::time::Instant;
+use test::*;
 
 #[inline(always)]
 fn bsf(input: u64) -> u32 {
@@ -49,26 +50,37 @@ fn main() {
     for i in 0..64 {
         print!("\nBit {} set:\n", i);
         let start1 = Instant::now();
-
-        for _ in 0..100000 {
-            let _a = bsf(x);
+        let n = test::black_box(1000);
+        let mut ctr = 0;
+        for i in 0..n {
+            let input = test::black_box(x);
+            ctr += bsf(input);
         }
         let elapsed_time1 = start1.elapsed();
-        println!("Running bsf() took {:?}.", elapsed_time1);
+        println!("Running bsf() took {:?}. sum = {}", elapsed_time1, ctr);
+        ctr = 0;
 
         let start2 = Instant::now();
-        for _ in 0..100000 {
-            let _b = find_first_one(x);
+        let n = test::black_box(1000);
+        let mut ctr = 0;
+        for i in 0..n {
+            let input = test::black_box(x);
+            ctr += find_first_one(input);
         }
         let elapsed_time2 = start2.elapsed();
-        println!("Running find_first_one() took {:?}.", elapsed_time2);
+        println!("Running find_first_one() took {:?}. sum = {}", elapsed_time2, ctr);
+        ctr = 0;
 
         let start3 = Instant::now();
-        for _ in 0..100000 {
-            let _c = trailing_zeros(x);
+        let n = test::black_box(1000);
+        let mut ctr = 0;
+        for i in 0..n {
+            let input = test::black_box(x);
+            ctr += trailing_zeros(input);
         }
         let elapsed_time3 = start3.elapsed();
-        println!("Running trailing_zeros() took {:?}.", elapsed_time3);
+        println!("Running trailing_zeros() took {:?}. sum = {}", elapsed_time3, ctr);
+        ctr = 0;
         x <<= 1;
 
         let _ = wtr.write_record(&[
@@ -89,7 +101,7 @@ mod tests {
     #[bench]
     fn bench_bsf(b: &mut Bencher) {
         b.iter(|| {
-            let n = test::black_box(100000);
+            let n = test::black_box(1000);
             let mut ctr = 0;
             for i in 0..n {
                 let input = test::black_box(1 << (i & 0x3F));
@@ -102,7 +114,7 @@ mod tests {
     #[bench]
     fn bench_loop(b: &mut Bencher) {
         b.iter(|| {
-            let n = test::black_box(100000);
+            let n = test::black_box(1000);
             let mut ctr = 0;
             for i in 0..n {
                 let input = test::black_box(1 << (i & 0x3F));
@@ -115,7 +127,7 @@ mod tests {
     #[bench]
     fn bench_trailling(b: &mut Bencher) {
         b.iter(|| {
-            let n = test::black_box(100000);
+            let n = test::black_box(1000);
             let mut ctr = 0;
             for i in 0..n {
                 let input = test::black_box(1 << (i & 0x3F));
