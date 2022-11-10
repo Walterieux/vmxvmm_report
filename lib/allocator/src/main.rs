@@ -5,9 +5,48 @@ fn main() {
     let mut frame_alloc = Box::new(BuddyAllocator::new());
     println!("Allocator instanciated!");
 
-    for i in 0..100*512*512 * 10 {
-        let new_frame = frame_alloc.allocate_frame();
-        frame_alloc.deallocate_frame(new_frame.unwrap());
-    }
+    const NB_GB: usize = 8;
+    const NB_PAGES: usize = 512 * 512 * NB_GB;
 
+    let mut cnt = 0;
+
+    for _ in 0..1000 {
+        // allocates all possible frames
+        for _ in 0..NB_PAGES {
+            let frame = frame_alloc.allocate_frame();
+            cnt += frame.unwrap();
+        }
+
+        // deallocates all frames
+        for i in 0..NB_PAGES {
+            frame_alloc.deallocate_frame(i);
+        }
+
+        // allocates all possible big pages
+        for _ in 0..512 {
+            for _ in 0..NB_PAGES / 512 {
+                let big_page = frame_alloc.allocate_big_page();
+                cnt += big_page.unwrap();
+            }
+
+            // deallocates all big pages
+            for i in 0..NB_PAGES / 512 {
+                frame_alloc.deallocate_big_page(i * 512);
+            }
+        }
+
+        // allocates all possible big pages
+        for _ in 0..512 * 512 {
+            for _ in 0..NB_GB {
+                let huge_page = frame_alloc.allocate_huge_page();
+                cnt += huge_page.unwrap();
+            }
+
+            // deallocates all big pages
+            for i in 0..NB_GB {
+                frame_alloc.deallocate_huge_page(i * 512 * 512);
+            }
+        }
+    }
+    println!("counter: {}", cnt)
 }

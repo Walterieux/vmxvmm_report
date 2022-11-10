@@ -366,7 +366,6 @@ impl BuddyAllocator {
         }
     }
     
-    // todo check integrity
     // perf
     // rust-gdb
 }
