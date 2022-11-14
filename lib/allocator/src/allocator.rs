@@ -1,6 +1,7 @@
 //! Revisited buddy allocator
 
 use std::arch::asm;
+use std::env;
 
 const NB_GB: usize = 8;
 const NB_PAGES: usize = 512 * 512 * NB_GB;
@@ -57,7 +58,6 @@ impl BuddyAllocator {
      * return None if allocation fails
      */
     pub fn allocate_frame(&mut self) -> Option<usize> {
-        assert!(std::mem::size_of::<PageType>() == 1);
         // First level search
         if self.tree_4kb[0] == 0 {
             return None;
@@ -75,6 +75,10 @@ impl BuddyAllocator {
                 block_chosen_l2 = i;
                 break;
             }
+        }
+        if block_chosen_l2 >= 8 {
+            println!("error! l1_idx: {}, l2_idx: {}", l1_idx, first_block_l2);
+            self.check_integrity();
         }
         assert!(block_chosen_l2 < 8);
         assert!(self.tree_4kb[first_block_l2 + block_chosen_l2] != 0u64);
@@ -98,10 +102,19 @@ impl BuddyAllocator {
         // Set bits to 0
         self.tree_4kb[first_block_l3 + block_chosen_l3] &= !(1u64 << (l3_idx % 64));
         // if block is full set upper level to 0
-        if l3_idx == 511 {
-            self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
-            if l2_idx == 511 {
-                self.tree_4kb[0] &= !(1u64 << l1_idx);
+        self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        for i in 0..8 {
+            if self.tree_4kb[first_block_l3 + i] != 0u64 {
+                self.tree_4kb[first_block_l2 + block_chosen_l2] |= 1u64 << (l2_idx % 64);
+                break;
+            }
+        }
+
+        self.tree_4kb[0] &= !(1u64 << l1_idx);
+        for i in 0..8 {
+            if self.tree_4kb[first_block_l2 + i] != 0u64 {
+                self.tree_4kb[0] |= 1u64 << l1_idx;
+                break;
             }
         }
 
@@ -156,21 +169,22 @@ impl BuddyAllocator {
         // Set bits to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
         // if block is full set upper level to 0
-        if l2_idx == 511 {
-            self.tree_2mb[0] &= !(1u64 << l1_idx);
+        self.tree_2mb[0] &= !(1u64 << l1_idx);
+        for i in 0..8 {
+            if self.tree_2mb[first_block_l2 + i] != 0u64 {
+                self.tree_2mb[0] |= 1u64 << l1_idx;
+                break;
+            }
         }
 
         // set bits from TREE_1GB and TREE_4KB to 0
         self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
-        let mut need_to_set_4kb_level1 = true;
+        self.tree_4kb[0] &= !(1u64 << l1_idx);
         for i in 0..8 {
-            if self.tree_4kb[first_block_l2 + i] != 0 {
-                need_to_set_4kb_level1 = false;
+            if self.tree_4kb[first_block_l2 + i] != 0u64 {
+                self.tree_4kb[0] |= 1u64 << l1_idx;
                 break;
             }
-        }
-        if need_to_set_4kb_level1 {
-            self.tree_4kb[0] &= !(1u64 << l1_idx);
         }
 
         self.tree_1gb[0] &= !(1u64 << l1_idx);
@@ -223,7 +237,6 @@ impl BuddyAllocator {
         id >>= 9;
         let l1_block_idx = id & 0x1FF;
 
-        // TODO check that frame was previously allocated
         let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
         self.tree_4kb[l1_tree_idx] |= 1u64 << l1_block_idx;
         let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
@@ -535,6 +548,7 @@ mod tests {
     #[test]
     fn test_dealloc_when_full() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
+        env::set_var("RUST_BACKTRACE", "1");
 
         for _ in 0..2 {
             // allocates all possible frames
