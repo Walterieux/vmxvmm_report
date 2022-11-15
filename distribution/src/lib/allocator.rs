@@ -1,6 +1,7 @@
 //! Revisited buddy allocator
 
 use std::arch::asm;
+use std::env;
 
 const NB_GB: usize = 8;
 const NB_PAGES: usize = 512 * 512 * NB_GB;
@@ -101,12 +102,14 @@ impl BuddyAllocator {
         // Set bits to 0
         self.tree_4kb[first_block_l3 + block_chosen_l3] &= !(1u64 << (l3_idx % 64));
         // if block is full set upper level to 0
-        if l3_idx == 511 {
-            self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
-            if l2_idx == 511 {
-                self.tree_4kb[0] &= !(1u64 << l1_idx);
+        self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        for i in 0..8 {
+            if self.tree_4kb[first_block_l3 + i] != 0u64 {
+                self.tree_4kb[first_block_l2 + block_chosen_l2] |= 1u64 << (l2_idx % 64);
+                break;
             }
         }
+
         self.tree_4kb[0] &= !(1u64 << l1_idx);
         for i in 0..8 {
             if self.tree_4kb[first_block_l2 + i] != 0u64 {
@@ -173,9 +176,6 @@ impl BuddyAllocator {
                 break;
             }
         }
-        // if l2_idx == 511 {
-        //     self.tree_2mb[0] &= !(1u64 << l1_idx);
-        // }
 
         // set bits from TREE_1GB and TREE_4KB to 0
         self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
@@ -214,6 +214,9 @@ impl BuddyAllocator {
         self.tree_4kb[0] &= !(1u64 << l1_idx);
 
         let final_idx = 512 * 512 * l1_idx;
+        if self.allocator_state[final_idx] != PageType::Free {
+            println!("error: Not free!");
+        }
         assert!(self.allocator_state[final_idx] == PageType::Free);
         self.allocator_state[final_idx] = PageType::Huge;
         return Some(final_idx);
@@ -264,7 +267,7 @@ impl BuddyAllocator {
         let mut need_to_free_1gb_level1 = true;
         let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
         for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != 0u64 {
+            if self.tree_2mb[first_block_l2 + i] != !0u64 {
                 need_to_free_1gb_level1 = false;
                 break;
             }
@@ -298,9 +301,8 @@ impl BuddyAllocator {
         let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
         self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
 
-        // TODO
-        //self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
-        //self.tree_4kb[0] |= 1u64 << l1_block_idx;
+        self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
+        self.tree_4kb[0] |= 1u64 << l1_block_idx;
 
         let mut need_to_free_1gb_level1 = true;
         let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
@@ -379,7 +381,59 @@ impl BuddyAllocator {
             num_next_free -= 1;
         }
     }
-    
+
+    /**
+     * Return the number of free block in the following order (1gb, 2mb, 4kb)
+     */
+    pub fn stat_free_memory(&self) -> (u64, u64, u64) {
+        let mut nb_4kb = 0u64;
+        let mut nb_2mb = 0u64;
+        let mut nb_1gb = 0u64;
+
+        let mut num_free = 0;
+        let mut i = 0;
+        while i < NB_PAGES {
+            match self.allocator_state[i] {
+                PageType::Frame => {
+                    i += 1;
+                    nb_1gb += num_free / (512 * 512);
+                    nb_2mb += (num_free % (512 * 512)) / 512;
+                    nb_4kb += num_free % 512;
+                    num_free = 0;
+                }
+                PageType::Big => {
+                    i += 512;
+                    assert!(num_free % 512 == 0);
+                    nb_1gb += num_free / (512 * 512);
+                    nb_2mb += (num_free % (512 * 512)) / 512;
+                    nb_4kb += num_free % 512;
+                    num_free = 0;
+                }
+                PageType::Huge => {
+                    i += 512 * 512;
+                    assert!(num_free % 512 == 0);
+                    nb_1gb += num_free / (512 * 512);
+                    nb_2mb += (num_free % (512 * 512)) / 512;
+                    num_free = 0;
+                }
+                PageType::Free => {
+                    if (i as u64) % 512 != num_free % 512 {
+                        assert!(num_free == 0);
+                        nb_4kb += 1;
+                    } else {
+                        num_free += 1;
+                    }
+                    i += 1;
+                }
+            }
+        }
+        nb_1gb += num_free / (512 * 512);
+        nb_2mb += (num_free % (512 * 512)) / 512;
+        nb_4kb += num_free % 512;
+
+        (nb_1gb, nb_2mb, nb_4kb)
+    }
+
     // perf
     // rust-gdb
 }
@@ -549,6 +603,7 @@ mod tests {
     #[test]
     fn test_dealloc_when_full() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
+        env::set_var("RUST_BACKTRACE", "1");
 
         for _ in 0..2 {
             // allocates all possible frames
