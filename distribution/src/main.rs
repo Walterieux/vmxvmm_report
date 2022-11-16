@@ -1,12 +1,25 @@
 use csv::Writer;
 use rand::distributions::{Bernoulli, Distribution};
+use rand::prelude::IteratorRandom;
 use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
 
+// use ulimit -s XXX to run the code
+
 fn main() {
     //save_plot_distribution(70.0);
-    //no_internal_fragmentation(70.0, 10);
+    //no_internal_fragmentation(70.0, 512);
     custom_allocator(70.0);
+}
+
+/** 
+ * Utilitary function to pop a random element from a given Vec
+ * To maximize performance, order is not kept
+ */ 
+
+fn choose(raw: &mut Vec<usize>) -> Option<usize> {
+    let i = (0..raw.len()).choose(&mut rand::thread_rng())?;
+    Some(raw.swap_remove(i))
 }
 
 /**
@@ -14,10 +27,11 @@ fn main() {
  *
  * lambda: threshold memory objective  (0;100)
  */
+#[allow(dead_code)]
 fn custom_allocator(lambda: f64) {
     assert!(0.0 < lambda && lambda < 100.0);
 
-    let num_gb = 8;
+    let num_gb = 512;
 
     let mut frame_alloc = Box::new(allocator::BuddyAllocator::new());
 
@@ -106,20 +120,20 @@ fn custom_allocator(lambda: f64) {
         } else {
             if prob_4kb_ber.sample(&mut rng) {
                 if allocated_4kb > 0 {
-                    frame_alloc.deallocate_frame(allocated_4kb_ids.pop().unwrap());
+                    frame_alloc.deallocate_frame(choose(&mut allocated_4kb_ids).unwrap());
                     free_num_4kb_blocks += 1;
                     allocated_4kb -= 1;
                 }
             } else if prob_2mb_ber.sample(&mut rng) {
                 if allocated_2mb > 0 {
-                    frame_alloc.deallocate_big_page(allocated_2mb_ids.pop().unwrap());
+                    frame_alloc.deallocate_big_page(choose(&mut allocated_2mb_ids).unwrap());
                     free_num_4kb_blocks += 512;
                     allocated_2mb -= 1;
                     // println!("dellocate 2mb at time {}", t);
                 }
             } else {
                 if allocated_1gb > 0 {
-                    frame_alloc.deallocate_huge_page(allocated_1gb_ids.pop().unwrap());
+                    frame_alloc.deallocate_huge_page(choose(&mut allocated_1gb_ids).unwrap());
                     free_num_4kb_blocks += 512 * 512;
                     allocated_1gb -= 1;
                     // println!("deallocate 1gb at time {}", t);
@@ -138,6 +152,7 @@ fn custom_allocator(lambda: f64) {
  * lambda: threshold memory objective  (0;100)
  * nb_gb: available memory (0; 512]
  */
+#[allow(dead_code)]
 fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
     assert!(0.0 < lambda && lambda < 100.0);
     assert!(0 < num_gb && num_gb <= 512);
@@ -171,7 +186,7 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
     let mut rng = rand::thread_rng();
     for t in 0..100_000_000 {
         // stats
-        if t % 100000 == 0 {
+        if t % 100_000 == 0 {
             let (free_1gb, free_2mb, free_4kb) = stat_free_memory(free_num_4kb_blocks);
             let _ = wtr.write_record(&[
                 t.to_string(),
@@ -240,9 +255,10 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
 }
 
 /**
- * given the number of 4kb free blocks, it returns the numbers of 1gb_block, 2mb_blocks and 4kb_blocks that can be allocated
- * no internal fragmentation
+ * given the number of 4kb free blocks, it returns the numbers of 1gb_block, 2mb_blocks and 4kb_blocks that can be allocated 
+ * without considering internal fragmentation
  */
+#[allow(dead_code)]
 fn stat_free_memory(num_free_4kb_blocks: u64) -> (u64, u64, u64) {
     let mut available_4kb_blocks = num_free_4kb_blocks;
     let nb_gb: u64 = available_4kb_blocks / (512 * 512);
@@ -257,6 +273,7 @@ fn stat_free_memory(num_free_4kb_blocks: u64) -> (u64, u64, u64) {
 /**
  * Save poisson inverse cumulative distribution function given lambda
  */
+#[allow(dead_code)]
 fn save_plot_distribution(lambda: f64) {
     let n = Poisson::new(lambda).unwrap();
 
