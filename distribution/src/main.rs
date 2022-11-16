@@ -169,7 +169,7 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
     let prob_2mb_ber = Bernoulli::from_ratio(512, 513).unwrap();
 
     let mut rng = rand::thread_rng();
-    for t in 0..100000000 {
+    for t in 0..100_000_000 {
         // stats
         if t % 100000 == 0 {
             let (free_1gb, free_2mb, free_4kb) = stat_free_memory(free_num_4kb_blocks);
