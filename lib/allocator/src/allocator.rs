@@ -1,11 +1,10 @@
 //! Revisited buddy allocator
 
 use std::arch::asm;
-use std::env;
 
-const NB_GB: usize = 8;
+const NB_GB: usize = 7;
 const NB_PAGES: usize = 512 * 512 * NB_GB;
-const TREE_1GB_SIZE: usize = NB_GB / 64 + if NB_GB % 64 != 0 { 1 } else { 0 }; // just a ceil
+const TREE_1GB_SIZE: usize = 8;
 const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;
 const TREE_4KB_SIZE: usize = TREE_2MB_SIZE + NB_GB * 512 * 512 / 64;
 
@@ -27,6 +26,7 @@ pub struct BuddyAllocator {
 
 impl BuddyAllocator {
     pub fn new() -> Self {
+        assert!(NB_GB <= 512);
         Self {
             tree_4kb: [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE],
             tree_2mb: [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE],
@@ -59,10 +59,17 @@ impl BuddyAllocator {
      */
     pub fn allocate_frame(&mut self) -> Option<usize> {
         // First level search
-        if self.tree_4kb[0] == 0 {
+        let mut block_chosen_l1 = 8;
+        for i in 0..8 {
+            if self.tree_4kb[i] != 0 {
+                block_chosen_l1 = i;
+                break;
+            }
+        }
+        if block_chosen_l1 == 8 {
             return None;
         }
-        let l1_idx = Self::bsf(self.tree_4kb[0]);
+        let l1_idx = Self::bsf(self.tree_4kb[block_chosen_l1]) + block_chosen_l1 * 64;
         if l1_idx >= NB_GB {
             return None;
         }
@@ -75,10 +82,6 @@ impl BuddyAllocator {
                 block_chosen_l2 = i;
                 break;
             }
-        }
-        if block_chosen_l2 >= 8 {
-            println!("error! l1_idx: {}, l2_idx: {}", l1_idx, first_block_l2);
-            self.check_integrity();
         }
         assert!(block_chosen_l2 < 8);
         assert!(self.tree_4kb[first_block_l2 + block_chosen_l2] != 0u64);
@@ -110,10 +113,10 @@ impl BuddyAllocator {
             }
         }
 
-        self.tree_4kb[0] &= !(1u64 << l1_idx);
+        self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
         for i in 0..8 {
             if self.tree_4kb[first_block_l2 + i] != 0u64 {
-                self.tree_4kb[0] |= 1u64 << l1_idx;
+                self.tree_4kb[block_chosen_l1] |= 1u64 << (l1_idx % 64);
                 break;
             }
         }
@@ -128,9 +131,9 @@ impl BuddyAllocator {
             }
         }
         if need_to_set_mb_level1 {
-            self.tree_2mb[0] &= !(1u64 << l1_idx);
+            self.tree_2mb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
         }
-        self.tree_1gb[0] &= !(1u64 << l1_idx);
+        self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
         assert!(self.allocator_state[final_idx] == PageType::Free);
@@ -144,10 +147,17 @@ impl BuddyAllocator {
      */
     pub fn allocate_big_page(&mut self) -> Option<usize> {
         // First level search
-        if self.tree_2mb[0] == 0 {
+        let mut block_chosen_l1 = 8;
+        for i in 0..8 {
+            if self.tree_2mb[i] != 0 {
+                block_chosen_l1 = i;
+                break;
+            }
+        }
+        if block_chosen_l1 == 8 {
             return None;
         }
-        let l1_idx = Self::bsf(self.tree_2mb[0]);
+        let l1_idx = Self::bsf(self.tree_2mb[block_chosen_l1]) + 64 * block_chosen_l1;
         if l1_idx >= NB_GB {
             return None;
         }
@@ -169,25 +179,25 @@ impl BuddyAllocator {
         // Set bits to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
         // if block is full set upper level to 0
-        self.tree_2mb[0] &= !(1u64 << l1_idx);
+        self.tree_2mb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
         for i in 0..8 {
             if self.tree_2mb[first_block_l2 + i] != 0u64 {
-                self.tree_2mb[0] |= 1u64 << l1_idx;
+                self.tree_2mb[block_chosen_l1] |= 1u64 << (l1_idx % 64);
                 break;
             }
         }
 
         // set bits from TREE_1GB and TREE_4KB to 0
         self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
-        self.tree_4kb[0] &= !(1u64 << l1_idx);
+        self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
         for i in 0..8 {
             if self.tree_4kb[first_block_l2 + i] != 0u64 {
-                self.tree_4kb[0] |= 1u64 << l1_idx;
+                self.tree_4kb[block_chosen_l1] |= 1u64 << (l1_idx % 64);
                 break;
             }
         }
 
-        self.tree_1gb[0] &= !(1u64 << l1_idx);
+        self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx;
         assert!(self.allocator_state[final_idx] == PageType::Free);
@@ -201,17 +211,24 @@ impl BuddyAllocator {
      */
     pub fn allocate_huge_page(&mut self) -> Option<usize> {
         // First level search
-        if self.tree_1gb[0] == 0 {
+        let mut block_chosen_l1 = 8;
+        for i in 0..8 {
+            if self.tree_1gb[i] != 0 {
+                block_chosen_l1 = i;
+                break;
+            }
+        }
+        if block_chosen_l1 == 8 {
             return None;
         }
-        let l1_idx = Self::bsf(self.tree_1gb[0]);
+        let l1_idx = Self::bsf(self.tree_1gb[block_chosen_l1]) + block_chosen_l1 * 64;
         if l1_idx >= NB_GB {
             return None;
         }
 
-        self.tree_1gb[0] &= !(1u64 << l1_idx);
-        self.tree_2mb[0] &= !(1u64 << l1_idx);
-        self.tree_4kb[0] &= !(1u64 << l1_idx);
+        self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_2mb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx;
         assert!(self.allocator_state[final_idx] == PageType::Free);
@@ -237,8 +254,8 @@ impl BuddyAllocator {
         id >>= 9;
         let l1_block_idx = id & 0x1FF;
 
-        let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
-        self.tree_4kb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        let l1_tree_idx = l1_block_idx / 64;
+        self.tree_4kb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
         self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
         let l3_tree_idx = TREE_1GB_SIZE
@@ -258,7 +275,7 @@ impl BuddyAllocator {
         }
         if need_to_free_2mb_level2 {
             self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
-            self.tree_2mb[0] |= 1u64 << l1_block_idx;
+            self.tree_2mb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
 
         let mut need_to_free_1gb_level1 = true;
@@ -270,7 +287,7 @@ impl BuddyAllocator {
             }
         }
         if need_to_free_1gb_level1 {
-            self.tree_1gb[0] |= 1u64 << (l1_block_idx % 64);
+            self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
     }
 
@@ -293,13 +310,13 @@ impl BuddyAllocator {
         let l1_block_idx = id & 0x1FF;
         assert!(l3_block_idx == 0); // l3_block_idx must be 0 for 2mb pages
 
-        let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
-        self.tree_2mb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        let l1_tree_idx = l1_block_idx / 64;
+        self.tree_2mb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
         self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
 
         self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
-        self.tree_4kb[0] |= 1u64 << l1_block_idx;
+        self.tree_4kb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
 
         let mut need_to_free_1gb_level1 = true;
         let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
@@ -310,7 +327,7 @@ impl BuddyAllocator {
             }
         }
         if need_to_free_1gb_level1 {
-            self.tree_1gb[0] |= 1u64 << l1_block_idx;
+            self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
 
         let mut need_to_free_1gb_level1 = true;
@@ -322,7 +339,7 @@ impl BuddyAllocator {
             }
         }
         if need_to_free_1gb_level1 {
-            self.tree_1gb[0] |= 1u64 << (l1_block_idx % 64);
+            self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
     }
 
@@ -346,10 +363,10 @@ impl BuddyAllocator {
         assert!(l3_block_idx == 0); // l3_block_idx must be 0 for 1gb pages
         assert!(l2_block_idx == 0); // l2_block_idx must be 0 for 1gb pages
 
-        let l1_tree_idx = 0; // assume l1_block_idx is between 0 and 63
-        self.tree_1gb[l1_tree_idx] |= 1u64 << l1_block_idx;
-        self.tree_2mb[l1_tree_idx] |= 1u64 << l1_block_idx;
-        self.tree_4kb[l1_tree_idx] |= 1u64 << l1_block_idx;
+        let l1_tree_idx = l1_block_idx / 64;
+        self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
+        self.tree_2mb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
+        self.tree_4kb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
     }
 
     /**
@@ -378,7 +395,7 @@ impl BuddyAllocator {
             num_next_free -= 1;
         }
     }
-    
+
     // perf
     // rust-gdb
 }
@@ -386,6 +403,7 @@ impl BuddyAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     const NB_PAGES: usize = 512 * 512 * NB_GB;
 
     #[test]
