@@ -264,7 +264,7 @@ impl BuddyAllocator {
         let mut need_to_free_1gb_level1 = true;
         let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
         for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != 0u64 {
+            if self.tree_2mb[first_block_l2 + i] != !0u64 {
                 need_to_free_1gb_level1 = false;
                 break;
             }
