@@ -9,6 +9,7 @@ edition = "2021"
 statrs = "0.16.0"
 csv = "1.1"
 rand = "0.8.5"
+indicatif="0.17.2"
 
 [dependencies.allocator]
 path="src/lib"
