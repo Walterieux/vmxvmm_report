@@ -2,7 +2,7 @@
 
 use std::arch::asm;
 
-const NB_GB: usize = 7;
+const NB_GB: usize = 512;
 const NB_PAGES: usize = 512 * 512 * NB_GB;
 const TREE_1GB_SIZE: usize = 8;
 const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;

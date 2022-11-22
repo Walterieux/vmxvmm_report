@@ -1,4 +1,4 @@
-bsf_benchmark/bsf_bench/target
+lib/bsf_benchmark/bsf_bench/target
 lib/allocator/target
-distribution/target
+lib/distribution/target
 *.lock

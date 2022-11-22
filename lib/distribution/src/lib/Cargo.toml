@@ -1,0 +1,8 @@
+[package]
+name  = "allocator"
+version = "0.0.1"
+authors = ["David_Desboeufs"]
+
+[lib]
+name = "allocator"
+path = "./../../../allocator/src/allocator.rs"
