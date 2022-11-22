@@ -54,6 +54,24 @@ impl BuddyAllocator {
     }
 
     /**
+     * Bit Scan Reverse
+     */
+    fn bsr(input: u64) -> usize {
+        assert!(input > 0);
+        let mut pos: usize;
+        unsafe {
+            asm! {
+                "bsr {pos}, {input}",
+                input = in(reg) input,
+                pos = out(reg) pos,
+                options(nomem, nostack),
+            };
+        };
+        assert!(pos < 64);
+        pos
+    }
+
+    /**
      * Allocates 4kb page
      * return None if allocation fails
      */
@@ -165,7 +183,7 @@ impl BuddyAllocator {
         // Second level search
         let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
         let mut block_chosen_l2 = 8;
-        for i in 0..8 {
+        for i in (0..8).rev() { // here we use reversed order to reduced internal fragmentation
             if self.tree_2mb[first_block_l2 + i] != 0 {
                 block_chosen_l2 = i;
                 break;
@@ -174,7 +192,7 @@ impl BuddyAllocator {
         assert!(block_chosen_l2 < 8);
         assert!(self.tree_2mb[first_block_l2 + block_chosen_l2] != 0u64);
         let l2_idx =
-            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
+            Self::bsr(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2; // bsr instead of bsf
 
         // Set bits to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));

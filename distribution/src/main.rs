@@ -1,8 +1,10 @@
 use csv::Writer;
 use rand::distributions::{Bernoulli, Distribution};
 use rand::prelude::IteratorRandom;
+use rand::rngs::ThreadRng;
 use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
+use indicatif::ProgressBar;
 
 // use ulimit -s XXX to run the code
 
@@ -12,13 +14,13 @@ fn main() {
     custom_allocator(70.0);
 }
 
-/** 
+/**
  * Utilitary function to pop a random element from a given Vec
  * To maximize performance, order is not kept
- */ 
+ */
 
-fn choose(raw: &mut Vec<usize>) -> Option<usize> {
-    let i = (0..raw.len()).choose(&mut rand::thread_rng())?;
+fn choose(raw: &mut Vec<usize>, rnd: &mut ThreadRng) -> Option<usize> {
+    let i = (0..raw.len()).choose(rnd)?;
     Some(raw.swap_remove(i))
 }
 
@@ -64,9 +66,15 @@ fn custom_allocator(lambda: f64) {
 
     let mut rng = rand::thread_rng();
 
-    for t in 0..100000000 {
+    let prob_4kb_ber = Bernoulli::from_ratio(262144, 262657).unwrap();
+    let prob_2mb_ber = Bernoulli::from_ratio(512, 513).unwrap();
+
+    let bar = ProgressBar::new(1000);
+
+    for t in 0..2_000_000_000 {
         // stats
-        if t % 100000 == 0 {            
+        if t % 2_000_000 == 0 {
+            bar.inc(1);
             let (free_1gb, free_2mb, free_4kb) = frame_alloc.stat_free_memory();
             let _ = wtr.write_record(&[
                 t.to_string(),
@@ -82,9 +90,7 @@ fn custom_allocator(lambda: f64) {
         let mem_occup: u64 = 100 * (tot_num_4kb_blocks - free_num_4kb_blocks) / tot_num_4kb_blocks;
 
         let d = Bernoulli::new(poisson.sf(mem_occup)).unwrap();
-        let prob_4kb_ber = Bernoulli::from_ratio(262144, 262657).unwrap();
-        let prob_2mb_ber = Bernoulli::from_ratio(512, 513).unwrap();
-        
+
         let is_allocation = d.sample(&mut rng);
         if is_allocation {
             if prob_4kb_ber.sample(&mut rng) {
@@ -120,20 +126,22 @@ fn custom_allocator(lambda: f64) {
         } else {
             if prob_4kb_ber.sample(&mut rng) {
                 if allocated_4kb > 0 {
-                    frame_alloc.deallocate_frame(choose(&mut allocated_4kb_ids).unwrap());
+                    frame_alloc.deallocate_frame(choose(&mut allocated_4kb_ids, &mut rng).unwrap());
                     free_num_4kb_blocks += 1;
                     allocated_4kb -= 1;
                 }
             } else if prob_2mb_ber.sample(&mut rng) {
                 if allocated_2mb > 0 {
-                    frame_alloc.deallocate_big_page(choose(&mut allocated_2mb_ids).unwrap());
+                    frame_alloc
+                        .deallocate_big_page(choose(&mut allocated_2mb_ids, &mut rng).unwrap());
                     free_num_4kb_blocks += 512;
                     allocated_2mb -= 1;
                     // println!("dellocate 2mb at time {}", t);
                 }
             } else {
                 if allocated_1gb > 0 {
-                    frame_alloc.deallocate_huge_page(choose(&mut allocated_1gb_ids).unwrap());
+                    frame_alloc
+                        .deallocate_huge_page(choose(&mut allocated_1gb_ids, &mut rng).unwrap());
                     free_num_4kb_blocks += 512 * 512;
                     allocated_1gb -= 1;
                     // println!("deallocate 1gb at time {}", t);
@@ -141,6 +149,8 @@ fn custom_allocator(lambda: f64) {
             }
         }
     }
+
+    bar.finish();
 
     let _ = wtr.flush();
 }
@@ -255,7 +265,7 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
 }
 
 /**
- * given the number of 4kb free blocks, it returns the numbers of 1gb_block, 2mb_blocks and 4kb_blocks that can be allocated 
+ * given the number of 4kb free blocks, it returns the numbers of 1gb_block, 2mb_blocks and 4kb_blocks that can be allocated
  * without considering internal fragmentation
  */
 #[allow(dead_code)]
