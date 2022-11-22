@@ -54,6 +54,24 @@ impl BuddyAllocator {
     }
 
     /**
+     * Bit Scan Reverse
+     */
+    fn bsr(input: u64) -> usize {
+        assert!(input > 0);
+        let mut pos: usize;
+        unsafe {
+            asm! {
+                "bsr {pos}, {input}",
+                input = in(reg) input,
+                pos = out(reg) pos,
+                options(nomem, nostack),
+            };
+        };
+        assert!(pos < 64);
+        pos
+    }
+
+    /**
      * Allocates 4kb page
      * return None if allocation fails
      */
@@ -165,7 +183,7 @@ impl BuddyAllocator {
         // Second level search
         let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
         let mut block_chosen_l2 = 8;
-        for i in 0..8 {
+        for i in (0..8).rev() { // here we use reversed order to reduced internal fragmentation
             if self.tree_2mb[first_block_l2 + i] != 0 {
                 block_chosen_l2 = i;
                 break;
@@ -174,7 +192,7 @@ impl BuddyAllocator {
         assert!(block_chosen_l2 < 8);
         assert!(self.tree_2mb[first_block_l2 + block_chosen_l2] != 0u64);
         let l2_idx =
-            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
+            Self::bsr(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2; // bsr instead of bsf
 
         // Set bits to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
@@ -394,6 +412,58 @@ impl BuddyAllocator {
             }
             num_next_free -= 1;
         }
+    }
+
+    /**
+     * Return the number of free block in the following order (1gb, 2mb, 4kb)
+     */
+    pub fn stat_free_memory(&self) -> (u64, u64, u64) {
+        let mut nb_4kb = 0u64;
+        let mut nb_2mb = 0u64;
+        let mut nb_1gb = 0u64;
+
+        let mut num_free = 0;
+        let mut i = 0;
+        while i < NB_PAGES {
+            match self.allocator_state[i] {
+                PageType::Frame => {
+                    i += 1;
+                    nb_1gb += num_free / (512 * 512);
+                    nb_2mb += (num_free % (512 * 512)) / 512;
+                    nb_4kb += num_free % 512;
+                    num_free = 0;
+                }
+                PageType::Big => {
+                    i += 512;
+                    assert!(num_free % 512 == 0);
+                    nb_1gb += num_free / (512 * 512);
+                    nb_2mb += (num_free % (512 * 512)) / 512;
+                    nb_4kb += num_free % 512;
+                    num_free = 0;
+                }
+                PageType::Huge => {
+                    i += 512 * 512;
+                    assert!(num_free % 512 == 0);
+                    nb_1gb += num_free / (512 * 512);
+                    nb_2mb += (num_free % (512 * 512)) / 512;
+                    num_free = 0;
+                }
+                PageType::Free => {
+                    if (i as u64) % 512 != num_free % 512 {
+                        assert!(num_free == 0);
+                        nb_4kb += 1;
+                    } else {
+                        num_free += 1;
+                    }
+                    i += 1;
+                }
+            }
+        }
+        nb_1gb += num_free / (512 * 512);
+        nb_2mb += (num_free % (512 * 512)) / 512;
+        nb_4kb += num_free % 512;
+
+        (nb_1gb, nb_2mb, nb_4kb)
     }
 
     // perf
