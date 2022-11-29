@@ -7,8 +7,6 @@ use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
 use indicatif::ProgressBar;
 
-// use ulimit -s XXX to run the code
-
 fn main() {
     //save_plot_distribution(70.0);
     //no_internal_fragmentation(70.0, 512);
@@ -61,10 +59,6 @@ fn custom_allocator(lambda: f64) {
     let mut allocated_2mb_ids: Vec<usize> = Vec::new();
     let mut allocated_1gb_ids: Vec<usize> = Vec::new();
 
-    let prob_4kb: f64 = 262144.0 / 262657.0;
-    let prob_2mb: f64 = prob_4kb / 512.0;
-    let prob_1gb: f64 = prob_2mb / 512.0;
-
     let mut rng = StdRng::seed_from_u64(222);
     //let mut rng = rand::thread_rng();
 
@@ -110,7 +104,6 @@ fn custom_allocator(lambda: f64) {
                     allocated_2mb_ids.push(frame.unwrap());
                     free_num_4kb_blocks -= 512;
                     allocated_2mb += 1;
-                    // println!("allocate 2mb at time {}", t);
                 } else {
                     println!("Not enough memory to allocate a big page!");
                 }
@@ -120,7 +113,6 @@ fn custom_allocator(lambda: f64) {
                     allocated_1gb_ids.push(frame.unwrap());
                     free_num_4kb_blocks -= 512 * 512;
                     allocated_1gb += 1;
-                    // println!("allocate 1gb at time {}", t);
                 } else {
                     println!("Not enough memory to allocate a huge page!");
                 }
@@ -188,10 +180,6 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
     let mut allocated_2mb: u64 = 0;
     let mut allocated_1gb: u64 = 0;
 
-    let prob_4kb: f64 = 262144.0 / 262657.0;
-    let prob_2mb: f64 = prob_4kb / 512.0;
-    let prob_1gb: f64 = prob_2mb / 512.0;
-
     let prob_4kb_ber = Bernoulli::from_ratio(262144, 262657).unwrap();
     let prob_2mb_ber = Bernoulli::from_ratio(512, 513).unwrap();
 
@@ -228,7 +216,6 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
                 if free_num_4kb_blocks >= 512 {
                     free_num_4kb_blocks -= 512;
                     allocated_2mb += 1;
-                    // println!("allocate 2mb at time {}", t);
                 } else {
                     println!("Not enough memory to allocate a big page!");
                 }
@@ -236,7 +223,6 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
                 if free_num_4kb_blocks >= 512 * 512 {
                     free_num_4kb_blocks -= 512 * 512;
                     allocated_1gb += 1;
-                    // println!("allocate 1gb at time {}", t);
                 } else {
                     println!("Not enough memory to allocate a huge page!");
                 }
@@ -251,13 +237,11 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
                 if allocated_2mb > 0 {
                     free_num_4kb_blocks += 512;
                     allocated_2mb -= 1;
-                    // println!("dellocate 2mb at time {}", t);
                 }
             } else {
                 if allocated_1gb > 0 {
                     free_num_4kb_blocks += 512 * 512;
                     allocated_1gb -= 1;
-                    // println!("deallocate 1gb at time {}", t);
                 }
             }
         }
