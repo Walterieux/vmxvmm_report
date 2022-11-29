@@ -9,14 +9,6 @@ const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;
 const TREE_4KB_SIZE: usize = TREE_2MB_SIZE + NB_GB * 512 * 512 / 64;
 
 #[derive(Copy, Clone, PartialEq)]
-enum PageType {
-    Free,
-    Frame,
-    Big,
-    Huge,
-}
-
-#[derive(Copy, Clone, PartialEq)]
 pub enum TreeType {
     Tree4kb,
     Tree2mb,
@@ -35,7 +27,6 @@ pub struct BuddyAllocator {
     tree_4kb: Box<[u64; TREE_4KB_SIZE]>,
     tree_2mb: Box<[u64; TREE_2MB_SIZE]>,
     tree_1gb: Box<[u64; TREE_1GB_SIZE]>,
-    allocator_state: Box<[PageType; NB_PAGES]>,
 }
 
 impl BuddyAllocator {
@@ -45,7 +36,6 @@ impl BuddyAllocator {
             tree_4kb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE]),
             tree_2mb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE]),
             tree_1gb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE]),
-            allocator_state: Box::new([PageType::Free; NB_PAGES]),
         }
     }
 
@@ -70,6 +60,7 @@ impl BuddyAllocator {
     /**
      * Bit Scan Reverse
      */
+    #[allow(dead_code)]
     fn bsr(input: u64) -> usize {
         assert!(input > 0);
         let mut pos: usize;
@@ -168,8 +159,6 @@ impl BuddyAllocator {
         self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
-        assert!(self.allocator_state[final_idx] == PageType::Free);
-        self.allocator_state[final_idx] = PageType::Frame;
         Some(final_idx)
     }
 
@@ -198,7 +187,6 @@ impl BuddyAllocator {
         let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
         let mut block_chosen_l2 = 8;
         for i in 0..8 {
-            // here we use reversed order to reduced internal fragmentation
             if self.tree_2mb[first_block_l2 + i] != 0 {
                 block_chosen_l2 = i;
                 break;
@@ -207,7 +195,7 @@ impl BuddyAllocator {
         assert!(block_chosen_l2 < 8);
         assert!(self.tree_2mb[first_block_l2 + block_chosen_l2] != 0u64);
         let l2_idx =
-            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2; // bsr instead of bsf
+            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
 
         // Set bits to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
@@ -233,8 +221,6 @@ impl BuddyAllocator {
         self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx;
-        assert!(self.allocator_state[final_idx] == PageType::Free);
-        self.allocator_state[final_idx] = PageType::Big;
         Some(final_idx)
     }
 
@@ -264,8 +250,6 @@ impl BuddyAllocator {
         self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx;
-        assert!(self.allocator_state[final_idx] == PageType::Free);
-        self.allocator_state[final_idx] = PageType::Huge;
         return Some(final_idx);
     }
 
@@ -276,10 +260,9 @@ impl BuddyAllocator {
     pub fn deallocate_frame(&mut self, frame_id: usize) {
         let mut id = frame_id;
         // return if frame was not allocated
-        if self.allocator_state[id] != PageType::Frame {
+        if self.get_bit_level_index(TreeType::Tree4kb, Level::Level3, id) {
             return;
         }
-        self.allocator_state[id] = PageType::Free;
 
         let l3_block_idx = id & 0x1FF;
         id >>= 9;
@@ -331,10 +314,12 @@ impl BuddyAllocator {
     pub fn deallocate_big_page(&mut self, frame_id: usize) {
         let mut id = frame_id;
         // return if big page was not allocated
-        if self.allocator_state[id] != PageType::Big {
+        if id % 512 != 0
+            || self.get_bit_level_index(TreeType::Tree2mb, Level::Level2, id)
+            || self.get_bit_level_index(TreeType::Tree4kb, Level::Level2, id)
+        {
             return;
         }
-        self.allocator_state[id] = PageType::Free;
 
         let l3_block_idx = id & 0x1FF;
         id >>= 9;
@@ -383,10 +368,13 @@ impl BuddyAllocator {
     pub fn deallocate_huge_page(&mut self, frame_id: usize) {
         let mut id = frame_id;
         // return if huge page was not allocated
-        if self.allocator_state[id] != PageType::Huge {
+        if id % (512 * 512) != 0
+            || self.get_bit_level_index(TreeType::Tree1gb, Level::Level1, id)
+            || self.get_bit_level_index(TreeType::Tree2mb, Level::Level1, id)
+            || self.get_bit_level_index(TreeType::Tree4kb, Level::Level1, id)
+        {
             return;
         }
-        self.allocator_state[id] = PageType::Free;
 
         let l3_block_idx = id & 0x1FF;
         id >>= 9;
@@ -406,33 +394,28 @@ impl BuddyAllocator {
      * Checks integrity of allocated pages
      * crash if integrity is not ensured
      */
-    // #[cfg(test)]
     pub fn check_integrity(&self) {
-        let mut num_next_free = 0;
         for i in 0..NB_PAGES {
-            if num_next_free > 0 {
-                assert!(self.allocator_state[i] == PageType::Free);
-            } else {
-                match self.allocator_state[i] {
-                    PageType::Big => {
-                        assert!(i % 512 == 0);
-                        num_next_free = 511
-                    }
-                    PageType::Huge => {
-                        assert!(i % (512 * 512) == 0);
-                        num_next_free = 512 * 512 - 1
-                    }
-                    _ => (),
-                }
-            }
-            num_next_free -= 1;
+            // 4Kb tree level 3 not free
+            assert!(
+                !(!self.get_bit_level_index(TreeType::Tree4kb, Level::Level3, i)
+                    && (self.get_bit_level_index(TreeType::Tree2mb, Level::Level2, i)
+                        || self.get_bit_level_index(TreeType::Tree1gb, Level::Level1, i)))
+            );
+
+            // 4Kb tree level 3 free and 2Mb level 2 not free
+            assert!(
+                !(self.get_bit_level_index(TreeType::Tree4kb, Level::Level3, i)
+                    && !self.get_bit_level_index(TreeType::Tree2mb, Level::Level2, i)
+                    && self.get_bit_level_index(TreeType::Tree1gb, Level::Level1, i))
+            );
         }
     }
 
     /**
      * Return the number of free block in the following order (1gb, 2mb, 4kb)
      */
-     pub fn stat_free_memory(&self) -> (u64, u64, u64) {
+    pub fn stat_free_memory(&self) -> (u64, u64, u64) {
         let mut nb_4kb = 0u64;
         let mut nb_2mb = 0u64;
         let mut nb_1gb = 0u64;
@@ -519,7 +502,7 @@ impl BuddyAllocator {
      * Check if a bit is set of a given tree at a given level
      * return true if bit equals 1, raise an error if given level does not exist
      */
-    pub fn get_bit_level_index(&self, tree_type: TreeType, level: Level, index: usize) -> bool {
+    fn get_bit_level_index(&self, tree_type: TreeType, level: Level, index: usize) -> bool {
         assert!(index < NB_PAGES);
 
         let mut id = index;
