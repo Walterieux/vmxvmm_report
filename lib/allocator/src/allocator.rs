@@ -77,36 +77,14 @@ impl BuddyAllocator {
     }
 
     /**
-     * Search for the first bit set in the next 512 bits at a given start index
-     * search from LSB to MSB
-     * return Some(idx) if a bit is set otherwise None
+     * Compute index of the first block at a given level given his parents indexes
      */
-    pub fn search_first_bit_set(&self, tree_type: TreeType, start_idx: usize) -> Option<usize> {
-        let mut found_index = None;
-        for i in 0..8 {
-            match tree_type {
-                TreeType::Tree4kb => {
-                    if self.tree_4kb[start_idx + i] != 0 {
-                        found_index = Some(Self::bsf(self.tree_4kb[start_idx + i]) + 64 * i);
-                        break;
-                    }
-                }
-                TreeType::Tree2mb => {
-                    if self.tree_2mb[start_idx + i] != 0 {
-                        found_index = Some(Self::bsf(self.tree_2mb[start_idx + i]) + 64 * i);
-                        break;
-                    }
-                }
-                TreeType::Tree1gb => {
-                    if self.tree_1gb[start_idx + i] != 0 {
-                        found_index = Some(Self::bsf(self.tree_1gb[start_idx + i]) + 64 * i);
-                        break;
-                    }
-                }
-            }
+    fn compute_first_block_index(l1_idx: usize, l2_idx: usize, level: Level) -> usize {
+        match level {
+            Level::Level1 => l1_idx/64,
+            Level::Level2 => TREE_1GB_SIZE + 8*l1_idx,
+            Level::Level3 => TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx,
         }
-
-        found_index
     }
 
     /**
@@ -136,50 +114,36 @@ impl BuddyAllocator {
         assert!(l3_idx_found.is_some());
         let l3_idx = l3_idx_found.unwrap();
 
-        // Set bits to 0
-        self.tree_4kb[first_block_l3 + l3_idx/64] &= !(1u64 << (l3_idx % 64));
+        // 4Kb tree: set bits to 0
+        self.tree_4kb[first_block_l3 + l3_idx / 64] &= !(1u64 << (l3_idx % 64));
         // if block is full set upper level to 0
-        if self.search_first_bit_set(TreeType::Tree4kb, first_block_l3).is_none() {
-            // TODO
-            // set level2 bit to 0
+        if self
+            .search_first_bit_set(TreeType::Tree4kb, first_block_l3)
+            .is_none()
+        {
+            self.tree_4kb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
+        }
+        if self
+            .search_first_bit_set(TreeType::Tree4kb, first_block_l2)
+            .is_none()
+        {
+            self.tree_4kb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
         }
 
-        self.tree_4kb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
-        for i in 0..8 {
-            if self.tree_4kb[first_block_l3 + i] != 0u64 {
-                self.tree_4kb[first_block_l2 + l2_idx / 64] |= 1u64 << (l2_idx % 64);
-                break;
-            }
-        }
-
-        if self.search_first_bit_set(TreeType::Tree4kb, first_block_l2).is_none() {
-            // TODO
-            // set level1 bit to 0
-        }
-        self.tree_4kb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
-        for i in 0..8 {
-            if self.tree_4kb[first_block_l2 + i] != 0u64 {
-                self.tree_4kb[l1_idx / 64] |= 1u64 << (l1_idx % 64);
-                break;
-            }
-        }
-
-        // set bits from TREE_1GB and TREE_2MB to 0
+        // 2Mb tree: set bits to 0
         self.tree_2mb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
-        let mut need_to_set_mb_level1 = true;
-        for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != 0 {
-                need_to_set_mb_level1 = false;
-                break;
-            }
+        if self
+            .search_first_bit_set(TreeType::Tree2mb, first_block_l2)
+            .is_none()
+        {
+            self.tree_2mb[l1_idx / 64] &= !(1u64 << (l1_idx % 64))
         }
-        if need_to_set_mb_level1 {
-            self.tree_2mb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
-        }
+
+        // 1Gb tree: set bit to 0
         self.tree_1gb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
 
-        let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
-        Some(final_idx)
+        // Memory index is built as follow: |l1 l1 l1 l1 l1 l1 l1 l1 l1|l2 l2 l2 l2 l2 l2 l2 l2 l2|l3 l3 l3 l3 l3 l3 l3 l3 l3|
+        Some((l1_idx << 18) + (l2_idx << 9) + l3_idx)
     }
 
     /**
@@ -204,30 +168,28 @@ impl BuddyAllocator {
         let l2_idx = l2_idx_found.unwrap();
 
         // Set bits to 0
-        self.tree_2mb[first_block_l2 + l2_idx/64] &= !(1u64 << (l2_idx % 64));
+        self.tree_2mb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
         // if block is full set upper level to 0
-        self.tree_2mb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
-        for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != 0u64 {
-                self.tree_2mb[l1_idx/64] |= 1u64 << (l1_idx % 64);
-                break;
-            }
+        if self
+            .search_first_bit_set(TreeType::Tree2mb, first_block_l2)
+            .is_none()
+        {
+            self.tree_2mb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
         }
 
         // set bits from TREE_1GB and TREE_4KB to 0
-        self.tree_4kb[first_block_l2 + l2_idx/64] &= !(1u64 << (l2_idx % 64));
-        self.tree_4kb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
-        for i in 0..8 {
-            if self.tree_4kb[first_block_l2 + i] != 0u64 {
-                self.tree_4kb[l1_idx/64] |= 1u64 << (l1_idx % 64);
-                break;
-            }
+        self.tree_4kb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
+        if self
+            .search_first_bit_set(TreeType::Tree4kb, first_block_l2)
+            .is_none()
+        {
+            self.tree_4kb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
         }
 
-        self.tree_1gb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
+        self.tree_1gb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
 
-        let final_idx = 512 * 512 * l1_idx + 512 * l2_idx;
-        Some(final_idx)
+        // Memory index is built as follow: |l1 l1 l1 l1 l1 l1 l1 l1 l1|l2 l2 l2 l2 l2 l2 l2 l2 l2|0 0 0 0 0 0 0 0 0|
+        Some((l1_idx << 18) + (l2_idx << 9))
     }
 
     /**
@@ -245,12 +207,13 @@ impl BuddyAllocator {
             return None;
         }
 
-        self.tree_1gb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
-        self.tree_2mb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
-        self.tree_4kb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
+        // set bits from TREE_1GB, TREE_2MB and TREE_4KB to 0
+        self.tree_1gb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
+        self.tree_2mb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
+        self.tree_4kb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
 
-        let final_idx = 512 * 512 * l1_idx;
-        return Some(final_idx);
+        // Memory index is built as follow: |l1 l1 l1 l1 l1 l1 l1 l1 l1|0 0 0 0 0 0 0 0 0|0 0 0 0 0 0 0 0 0|
+        Some(l1_idx << 18)
     }
 
     /**
@@ -270,6 +233,7 @@ impl BuddyAllocator {
         id >>= 9;
         let l1_block_idx = id & 0x1FF;
 
+        // Set the 3 levels to free
         let l1_tree_idx = l1_block_idx / 64;
         self.tree_4kb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
@@ -579,6 +543,40 @@ impl BuddyAllocator {
             }
         }
     }
+
+    /**
+     * Search for the first bit set in the next 512 bits at a given start index
+     * search from LSB to MSB
+     * return Some(idx) if a bit is set otherwise None
+     */
+    fn search_first_bit_set(&self, tree_type: TreeType, start_idx: usize) -> Option<usize> {
+        let mut found_index = None;
+        for i in 0..8 {
+            // code duplication because of `match` arms have incompatible types
+            match tree_type {
+                TreeType::Tree4kb => {
+                    if self.tree_4kb[start_idx + i] != 0 {
+                        found_index = Some(Self::bsf(self.tree_4kb[start_idx + i]) + 64 * i);
+                        break;
+                    }
+                }
+                TreeType::Tree2mb => {
+                    if self.tree_2mb[start_idx + i] != 0 {
+                        found_index = Some(Self::bsf(self.tree_2mb[start_idx + i]) + 64 * i);
+                        break;
+                    }
+                }
+                TreeType::Tree1gb => {
+                    if self.tree_1gb[start_idx + i] != 0 {
+                        found_index = Some(Self::bsf(self.tree_1gb[start_idx + i]) + 64 * i);
+                        break;
+                    }
+                }
+            }
+        }
+
+        found_index
+    }
 }
 
 #[cfg(test)]
@@ -600,7 +598,7 @@ mod tests {
     fn test_alloc_when_full() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES {
-            if i % NB_PAGES/100 == 0 {
+            if i % NB_PAGES / 100 == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_frame();
@@ -644,7 +642,7 @@ mod tests {
     fn test_alloc_and_dealloc_big_several_times() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES {
-            if i % NB_PAGES/100 == 0 {
+            if i % NB_PAGES / 100 == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_big_page();
@@ -657,7 +655,7 @@ mod tests {
     fn test_alloc_and_dealloc_huge_several_times() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES {
-            if i % NB_PAGES/100 == 0 {
+            if i % NB_PAGES / 100 == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_huge_page();
