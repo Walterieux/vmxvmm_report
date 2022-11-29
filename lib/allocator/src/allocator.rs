@@ -77,75 +77,95 @@ impl BuddyAllocator {
     }
 
     /**
+     * Search for the first bit set in the next 512 bits at a given start index
+     * search from LSB to MSB
+     * return Some(idx) if a bit is set otherwise None
+     */
+    pub fn search_first_bit_set(&self, tree_type: TreeType, start_idx: usize) -> Option<usize> {
+        let mut found_index = None;
+        for i in 0..8 {
+            match tree_type {
+                TreeType::Tree4kb => {
+                    if self.tree_4kb[start_idx + i] != 0 {
+                        found_index = Some(Self::bsf(self.tree_4kb[start_idx + i]) + 64 * i);
+                        break;
+                    }
+                }
+                TreeType::Tree2mb => {
+                    if self.tree_2mb[start_idx + i] != 0 {
+                        found_index = Some(Self::bsf(self.tree_2mb[start_idx + i]) + 64 * i);
+                        break;
+                    }
+                }
+                TreeType::Tree1gb => {
+                    if self.tree_1gb[start_idx + i] != 0 {
+                        found_index = Some(Self::bsf(self.tree_1gb[start_idx + i]) + 64 * i);
+                        break;
+                    }
+                }
+            }
+        }
+
+        found_index
+    }
+
+    /**
      * Allocates 4kb page
      * return None if allocation fails
      */
     pub fn allocate_frame(&mut self) -> Option<usize> {
         // First level search
-        let mut block_chosen_l1 = 8;
-        for i in 0..8 {
-            if self.tree_4kb[i] != 0 {
-                block_chosen_l1 = i;
-                break;
-            }
-        }
-        if block_chosen_l1 == 8 {
+        let l1_idx_found = self.search_first_bit_set(TreeType::Tree4kb, 0);
+        if l1_idx_found.is_none() {
             return None;
         }
-        let l1_idx = Self::bsf(self.tree_4kb[block_chosen_l1]) + block_chosen_l1 * 64;
+        let l1_idx = l1_idx_found.unwrap();
         if l1_idx >= NB_GB {
             return None;
         }
 
         // Second level search
         let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
-        let mut block_chosen_l2 = 8;
-        for i in 0..8 {
-            if self.tree_4kb[first_block_l2 + i] != 0 {
-                block_chosen_l2 = i;
-                break;
-            }
-        }
-        assert!(block_chosen_l2 < 8);
-        assert!(self.tree_4kb[first_block_l2 + block_chosen_l2] != 0u64);
-        let l2_idx =
-            Self::bsf(self.tree_4kb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
+        let l2_idx_found = self.search_first_bit_set(TreeType::Tree4kb, first_block_l2);
+        assert!(l2_idx_found.is_some());
+        let l2_idx = l2_idx_found.unwrap();
 
         // Third level search
         let first_block_l3 = TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx;
-        let mut block_chosen_l3 = 8;
-        for j in 0..8 {
-            if self.tree_4kb[first_block_l3 + j] != 0u64 {
-                block_chosen_l3 = j;
-                break;
-            }
-        }
-        assert!(block_chosen_l3 < 8);
-        assert!(self.tree_4kb[first_block_l3 + block_chosen_l3] != 0);
-        let l3_idx =
-            Self::bsf(self.tree_4kb[first_block_l3 + block_chosen_l3]) + 64 * block_chosen_l3;
+        let l3_idx_found = self.search_first_bit_set(TreeType::Tree4kb, first_block_l3);
+        assert!(l3_idx_found.is_some());
+        let l3_idx = l3_idx_found.unwrap();
 
         // Set bits to 0
-        self.tree_4kb[first_block_l3 + block_chosen_l3] &= !(1u64 << (l3_idx % 64));
+        self.tree_4kb[first_block_l3 + l3_idx/64] &= !(1u64 << (l3_idx % 64));
         // if block is full set upper level to 0
-        self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        if self.search_first_bit_set(TreeType::Tree4kb, first_block_l3).is_none() {
+            // TODO
+            // set level2 bit to 0
+        }
+
+        self.tree_4kb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
         for i in 0..8 {
             if self.tree_4kb[first_block_l3 + i] != 0u64 {
-                self.tree_4kb[first_block_l2 + block_chosen_l2] |= 1u64 << (l2_idx % 64);
+                self.tree_4kb[first_block_l2 + l2_idx / 64] |= 1u64 << (l2_idx % 64);
                 break;
             }
         }
 
-        self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        if self.search_first_bit_set(TreeType::Tree4kb, first_block_l2).is_none() {
+            // TODO
+            // set level1 bit to 0
+        }
+        self.tree_4kb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
         for i in 0..8 {
             if self.tree_4kb[first_block_l2 + i] != 0u64 {
-                self.tree_4kb[block_chosen_l1] |= 1u64 << (l1_idx % 64);
+                self.tree_4kb[l1_idx / 64] |= 1u64 << (l1_idx % 64);
                 break;
             }
         }
 
         // set bits from TREE_1GB and TREE_2MB to 0
-        self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        self.tree_2mb[first_block_l2 + l2_idx / 64] &= !(1u64 << (l2_idx % 64));
         let mut need_to_set_mb_level1 = true;
         for i in 0..8 {
             if self.tree_2mb[first_block_l2 + i] != 0 {
@@ -154,9 +174,9 @@ impl BuddyAllocator {
             }
         }
         if need_to_set_mb_level1 {
-            self.tree_2mb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+            self.tree_2mb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
         }
-        self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_1gb[l1_idx / 64] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx + l3_idx;
         Some(final_idx)
@@ -168,57 +188,43 @@ impl BuddyAllocator {
      */
     pub fn allocate_big_page(&mut self) -> Option<usize> {
         // First level search
-        let mut block_chosen_l1 = 8;
-        for i in 0..8 {
-            if self.tree_2mb[i] != 0 {
-                block_chosen_l1 = i;
-                break;
-            }
-        }
-        if block_chosen_l1 == 8 {
+        let l1_idx_found = self.search_first_bit_set(TreeType::Tree2mb, 0);
+        if l1_idx_found.is_none() {
             return None;
         }
-        let l1_idx = Self::bsf(self.tree_2mb[block_chosen_l1]) + 64 * block_chosen_l1;
+        let l1_idx = l1_idx_found.unwrap();
         if l1_idx >= NB_GB {
             return None;
         }
 
         // Second level search
         let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
-        let mut block_chosen_l2 = 8;
-        for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != 0 {
-                block_chosen_l2 = i;
-                break;
-            }
-        }
-        assert!(block_chosen_l2 < 8);
-        assert!(self.tree_2mb[first_block_l2 + block_chosen_l2] != 0u64);
-        let l2_idx =
-            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2;
+        let l2_idx_found = self.search_first_bit_set(TreeType::Tree2mb, first_block_l2);
+        assert!(l2_idx_found.is_some());
+        let l2_idx = l2_idx_found.unwrap();
 
         // Set bits to 0
-        self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
+        self.tree_2mb[first_block_l2 + l2_idx/64] &= !(1u64 << (l2_idx % 64));
         // if block is full set upper level to 0
-        self.tree_2mb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_2mb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
         for i in 0..8 {
             if self.tree_2mb[first_block_l2 + i] != 0u64 {
-                self.tree_2mb[block_chosen_l1] |= 1u64 << (l1_idx % 64);
+                self.tree_2mb[l1_idx/64] |= 1u64 << (l1_idx % 64);
                 break;
             }
         }
 
         // set bits from TREE_1GB and TREE_4KB to 0
-        self.tree_4kb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
-        self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_4kb[first_block_l2 + l2_idx/64] &= !(1u64 << (l2_idx % 64));
+        self.tree_4kb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
         for i in 0..8 {
             if self.tree_4kb[first_block_l2 + i] != 0u64 {
-                self.tree_4kb[block_chosen_l1] |= 1u64 << (l1_idx % 64);
+                self.tree_4kb[l1_idx/64] |= 1u64 << (l1_idx % 64);
                 break;
             }
         }
 
-        self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_1gb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx + 512 * l2_idx;
         Some(final_idx)
@@ -230,24 +236,18 @@ impl BuddyAllocator {
      */
     pub fn allocate_huge_page(&mut self) -> Option<usize> {
         // First level search
-        let mut block_chosen_l1 = 8;
-        for i in 0..8 {
-            if self.tree_1gb[i] != 0 {
-                block_chosen_l1 = i;
-                break;
-            }
-        }
-        if block_chosen_l1 == 8 {
+        let l1_idx_found = self.search_first_bit_set(TreeType::Tree1gb, 0);
+        if l1_idx_found.is_none() {
             return None;
         }
-        let l1_idx = Self::bsf(self.tree_1gb[block_chosen_l1]) + block_chosen_l1 * 64;
+        let l1_idx = l1_idx_found.unwrap();
         if l1_idx >= NB_GB {
             return None;
         }
 
-        self.tree_1gb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
-        self.tree_2mb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
-        self.tree_4kb[block_chosen_l1] &= !(1u64 << (l1_idx % 64));
+        self.tree_1gb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
+        self.tree_2mb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
+        self.tree_4kb[l1_idx/64] &= !(1u64 << (l1_idx % 64));
 
         let final_idx = 512 * 512 * l1_idx;
         return Some(final_idx);
@@ -513,6 +513,27 @@ impl BuddyAllocator {
         id >>= 9;
         let l1_block_idx = id & 0x1FF;
 
+        self.get_bit_level_block_levels_index(
+            tree_type,
+            level,
+            l1_block_idx,
+            l2_block_idx,
+            l3_block_idx,
+        )
+    }
+
+    /**
+     * Check if a bit is set of a given tree at a given level (l1_block_idx, l2_block_idx and l3_block_idx are given)
+     * return true if bit equals 1, raise an error if given level does not exist
+     */
+    fn get_bit_level_block_levels_index(
+        &self,
+        tree_type: TreeType,
+        level: Level,
+        l1_block_idx: usize,
+        l2_block_idx: usize,
+        l3_block_idx: usize,
+    ) -> bool {
         let l1_tree_idx = l1_block_idx / 64;
         let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
         let l3_tree_idx = TREE_1GB_SIZE
@@ -579,7 +600,7 @@ mod tests {
     fn test_alloc_when_full() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES {
-            if i % 1000 == 0 {
+            if i % NB_PAGES/100 == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_frame();
@@ -595,7 +616,7 @@ mod tests {
     fn test_alloc_and_dealloc_several_times() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES * 10 {
-            if i % 10000 == 0 {
+            if i % NB_PAGES == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_frame();
@@ -623,7 +644,7 @@ mod tests {
     fn test_alloc_and_dealloc_big_several_times() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES {
-            if i % 1000 == 0 {
+            if i % NB_PAGES/100 == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_big_page();
@@ -636,7 +657,7 @@ mod tests {
     fn test_alloc_and_dealloc_huge_several_times() {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
         for i in 0..NB_PAGES {
-            if i % 1000 == 0 {
+            if i % NB_PAGES/100 == 0 {
                 frame_alloc.check_integrity();
             }
             let new_frame = frame_alloc.allocate_huge_page();
@@ -668,9 +689,6 @@ mod tests {
         let mut frame_alloc = Box::new(BuddyAllocator::new());
 
         for i in 0..NB_PAGES / 512 {
-            if i % 100 == 0 {
-                frame_alloc.check_integrity();
-            }
             if i % 2 == 0 {
                 let big_page = frame_alloc.allocate_big_page();
                 assert!(big_page.is_some());
