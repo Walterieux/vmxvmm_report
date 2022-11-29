@@ -1,7 +1,8 @@
 use csv::Writer;
 use rand::distributions::{Bernoulli, Distribution};
 use rand::prelude::IteratorRandom;
-use rand::rngs::ThreadRng;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
 use indicatif::ProgressBar;
@@ -19,7 +20,7 @@ fn main() {
  * To maximize performance, order is not kept
  */
 
-fn choose(raw: &mut Vec<usize>, rnd: &mut ThreadRng) -> Option<usize> {
+fn choose(raw: &mut Vec<usize>, rnd: &mut StdRng) -> Option<usize> {
     let i = (0..raw.len()).choose(rnd)?;
     Some(raw.swap_remove(i))
 }
@@ -64,16 +65,17 @@ fn custom_allocator(lambda: f64) {
     let prob_2mb: f64 = prob_4kb / 512.0;
     let prob_1gb: f64 = prob_2mb / 512.0;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = StdRng::seed_from_u64(222);
+    //let mut rng = rand::thread_rng();
 
     let prob_4kb_ber = Bernoulli::from_ratio(262144, 262657).unwrap();
     let prob_2mb_ber = Bernoulli::from_ratio(512, 513).unwrap();
 
     let bar = ProgressBar::new(1000);
 
-    for t in 0..2_000_000_000 {
+    for t in 0..1_000_000_000 {
         // stats
-        if t % 2_000_000 == 0 {
+        if t % 1_000_000 == 0 {
             bar.inc(1);
             let (free_1gb, free_2mb, free_4kb) = frame_alloc.stat_free_memory();
             let _ = wtr.write_record(&[
