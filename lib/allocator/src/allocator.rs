@@ -16,22 +16,36 @@ enum PageType {
     Huge,
 }
 
+#[derive(Copy, Clone, PartialEq)]
+pub enum TreeType {
+    Tree4kb,
+    Tree2mb,
+    Tree1gb,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum Level {
+    Level1,
+    Level2,
+    Level3,
+}
+
 // TODO generic const <const N>
 pub struct BuddyAllocator {
-    tree_4kb: [u64; TREE_4KB_SIZE],
-    tree_2mb: [u64; TREE_2MB_SIZE],
-    tree_1gb: [u64; TREE_1GB_SIZE],
-    allocator_state: [PageType; NB_PAGES],
+    tree_4kb: Box<[u64; TREE_4KB_SIZE]>,
+    tree_2mb: Box<[u64; TREE_2MB_SIZE]>,
+    tree_1gb: Box<[u64; TREE_1GB_SIZE]>,
+    allocator_state: Box<[PageType; NB_PAGES]>,
 }
 
 impl BuddyAllocator {
     pub fn new() -> Self {
         assert!(NB_GB <= 512);
         Self {
-            tree_4kb: [0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE],
-            tree_2mb: [0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE],
-            tree_1gb: [0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE],
-            allocator_state: [PageType::Free; NB_PAGES],
+            tree_4kb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE]),
+            tree_2mb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE]),
+            tree_1gb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE]),
+            allocator_state: Box::new([PageType::Free; NB_PAGES]),
         }
     }
 
@@ -183,7 +197,8 @@ impl BuddyAllocator {
         // Second level search
         let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
         let mut block_chosen_l2 = 8;
-        for i in (0..8).rev() { // here we use reversed order to reduced internal fragmentation
+        for i in 0..8 {
+            // here we use reversed order to reduced internal fragmentation
             if self.tree_2mb[first_block_l2 + i] != 0 {
                 block_chosen_l2 = i;
                 break;
@@ -192,7 +207,7 @@ impl BuddyAllocator {
         assert!(block_chosen_l2 < 8);
         assert!(self.tree_2mb[first_block_l2 + block_chosen_l2] != 0u64);
         let l2_idx =
-            Self::bsr(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2; // bsr instead of bsf
+            Self::bsf(self.tree_2mb[first_block_l2 + block_chosen_l2]) + 64 * block_chosen_l2; // bsr instead of bsf
 
         // Set bits to 0
         self.tree_2mb[first_block_l2 + block_chosen_l2] &= !(1u64 << (l2_idx % 64));
@@ -417,7 +432,7 @@ impl BuddyAllocator {
     /**
      * Return the number of free block in the following order (1gb, 2mb, 4kb)
      */
-    pub fn stat_free_memory(&self) -> (u64, u64, u64) {
+     pub fn stat_free_memory(&self) -> (u64, u64, u64) {
         let mut nb_4kb = 0u64;
         let mut nb_2mb = 0u64;
         let mut nb_1gb = 0u64;
@@ -425,40 +440,74 @@ impl BuddyAllocator {
         let mut num_free = 0;
         let mut i = 0;
         while i < NB_PAGES {
-            match self.allocator_state[i] {
-                PageType::Frame => {
-                    i += 1;
-                    nb_1gb += num_free / (512 * 512);
-                    nb_2mb += (num_free % (512 * 512)) / 512;
-                    nb_4kb += num_free % 512;
-                    num_free = 0;
-                }
-                PageType::Big => {
-                    i += 512;
-                    assert!(num_free % 512 == 0);
-                    nb_1gb += num_free / (512 * 512);
-                    nb_2mb += (num_free % (512 * 512)) / 512;
-                    nb_4kb += num_free % 512;
-                    num_free = 0;
-                }
-                PageType::Huge => {
-                    i += 512 * 512;
-                    assert!(num_free % 512 == 0);
-                    nb_1gb += num_free / (512 * 512);
-                    nb_2mb += (num_free % (512 * 512)) / 512;
-                    num_free = 0;
-                }
-                PageType::Free => {
-                    if (i as u64) % 512 != num_free % 512 {
-                        assert!(num_free == 0);
-                        nb_4kb += 1;
-                    } else {
-                        num_free += 1;
-                    }
-                    i += 1;
-                }
+            // 4Kb tree level 3 not free
+            if !self.get_bit_level_index(TreeType::Tree4kb, Level::Level3, i) {
+                i += 1;
+                nb_1gb += num_free / (512 * 512);
+                nb_2mb += (num_free % (512 * 512)) / 512;
+                nb_4kb += num_free % 512;
+                num_free = 0;
+                continue;
             }
+
+            // Not aligned 2Mb
+            if i % 512 != 0 {
+                if (i as u64) % 512 != num_free % 512 {
+                    assert!(num_free == 0);
+                    nb_4kb += 1;
+                } else {
+                    num_free += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            // 2Mb and 4Kb trees level 2 not free
+            if !self.get_bit_level_index(TreeType::Tree2mb, Level::Level2, i)
+                && !self.get_bit_level_index(TreeType::Tree4kb, Level::Level2, i)
+            {
+                i += 512;
+                nb_1gb += num_free / (512 * 512);
+                nb_2mb += (num_free % (512 * 512)) / 512;
+                nb_4kb += num_free % 512;
+                num_free = 0;
+                continue;
+            }
+
+            // Not aligned 1Gb
+            if i % (512 * 512) != 0 {
+                if (i as u64) % 512 != num_free % 512 {
+                    assert!(num_free == 0);
+                    nb_4kb += 1;
+                } else {
+                    num_free += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            // 1Gb, 2Mb and 4Kb trees level 1 not free
+            if !self.get_bit_level_index(TreeType::Tree1gb, Level::Level1, i)
+                && !self.get_bit_level_index(TreeType::Tree2mb, Level::Level1, i)
+                && !self.get_bit_level_index(TreeType::Tree4kb, Level::Level1, i)
+            {
+                i += 512 * 512;
+                nb_1gb += num_free / (512 * 512);
+                nb_2mb += (num_free % (512 * 512)) / 512;
+                nb_4kb += num_free % 512;
+                num_free = 0;
+                continue;
+            }
+
+            if (i as u64) % 512 != num_free % 512 {
+                assert!(num_free == 0);
+                nb_4kb += 1;
+            } else {
+                num_free += 1;
+            }
+            i += 1;
         }
+
         nb_1gb += num_free / (512 * 512);
         nb_2mb += (num_free % (512 * 512)) / 512;
         nb_4kb += num_free % 512;
@@ -466,8 +515,66 @@ impl BuddyAllocator {
         (nb_1gb, nb_2mb, nb_4kb)
     }
 
-    // perf
-    // rust-gdb
+    /**
+     * Check if a bit is set of a given tree at a given level
+     * return true if bit equals 1, raise an error if given level does not exist
+     */
+    pub fn get_bit_level_index(&self, tree_type: TreeType, level: Level, index: usize) -> bool {
+        assert!(index < NB_PAGES);
+
+        let mut id = index;
+
+        let l3_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l2_block_idx = id & 0x1FF;
+        id >>= 9;
+        let l1_block_idx = id & 0x1FF;
+
+        let l1_tree_idx = l1_block_idx / 64;
+        let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
+        let l3_tree_idx = TREE_1GB_SIZE
+            + 8 * NB_GB
+            + 512 * 8 * l1_block_idx
+            + 8 * l2_block_idx
+            + l3_block_idx / 64;
+
+        match tree_type {
+            TreeType::Tree4kb => match level {
+                Level::Level1 => {
+                    return (self.tree_4kb[l1_tree_idx] & 1 << (l1_block_idx % 64)) != 0
+                }
+                Level::Level2 => {
+                    return (self.tree_4kb[l2_tree_idx] & 1 << (l2_block_idx % 64)) != 0
+                }
+                Level::Level3 => {
+                    return (self.tree_4kb[l3_tree_idx] & 1 << (l3_block_idx % 64)) != 0
+                }
+            },
+            TreeType::Tree2mb => {
+                assert!(level != Level::Level3);
+                match level {
+                    Level::Level1 => {
+                        return (self.tree_2mb[l1_tree_idx] & 1 << (l1_block_idx % 64)) != 0
+                    }
+
+                    Level::Level2 => {
+                        return (self.tree_2mb[l2_tree_idx] & 1 << (l2_block_idx % 64)) != 0
+                    }
+                    Level::Level3 => false,
+                }
+            }
+            TreeType::Tree1gb => {
+                assert!(level == Level::Level1);
+                match level {
+                    Level::Level1 => {
+                        return (self.tree_1gb[l1_tree_idx] & 1 << (l1_block_idx % 64)) != 0
+                    }
+                    Level::Level2 => false,
+                    Level::Level3 => false,
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
