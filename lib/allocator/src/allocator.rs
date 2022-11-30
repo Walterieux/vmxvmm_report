@@ -77,7 +77,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Allocates 4kb page
+     * Allocate 4kb page
      * return None if allocation fails
      */
     pub fn allocate_frame(&mut self) -> Option<usize> {
@@ -136,7 +136,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Allocates 2Mb page
+     * Allocate 2Mb page
      * return None if allocation fails
      */
     pub fn allocate_big_page(&mut self) -> Option<usize> {
@@ -182,7 +182,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Allocates 1Gb page
+     * Allocate 1Gb page
      * return None if allocation fails
      */
     pub fn allocate_huge_page(&mut self) -> Option<usize> {
@@ -206,7 +206,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Deallocates frame
+     * Deallocate frame
      * nothing is done if frame was not previously allocated
      */
     pub fn deallocate_frame(&mut self, frame_id: usize) {
@@ -249,7 +249,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Deallocates big page
+     * Deallocate big page
      * nothing is done if page was not previously allocated
      */
     pub fn deallocate_big_page(&mut self, frame_id: usize) {
@@ -286,7 +286,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Deallocates huge page
+     * Deallocate huge page
      * nothing is done if frame was not previously allocated
      */
     pub fn deallocate_huge_page(&mut self, frame_id: usize) {
@@ -315,7 +315,7 @@ impl BuddyAllocator {
     }
 
     /**
-     * Checks integrity of allocated pages
+     * Check integrity of allocated pages
      * crash if integrity is not ensured
      */
     pub fn check_integrity(&self) {
