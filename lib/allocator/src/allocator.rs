@@ -77,17 +77,6 @@ impl BuddyAllocator {
     }
 
     /**
-     * Compute index of the first block at a given level given his parents indexes
-     */
-    fn compute_first_block_index(l1_idx: usize, l2_idx: usize, level: Level) -> usize {
-        match level {
-            Level::Level1 => l1_idx/64,
-            Level::Level2 => TREE_1GB_SIZE + 8*l1_idx,
-            Level::Level3 => TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx,
-        }
-    }
-
-    /**
      * Allocates 4kb page
      * return None if allocation fails
      */
@@ -103,13 +92,13 @@ impl BuddyAllocator {
         }
 
         // Second level search
-        let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
+        let first_block_l2 = Self::compute_first_block_index(l1_idx, 0, Level::Level2);
         let l2_idx_found = self.search_first_bit_set(TreeType::Tree4kb, first_block_l2);
         assert!(l2_idx_found.is_some());
         let l2_idx = l2_idx_found.unwrap();
 
         // Third level search
-        let first_block_l3 = TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx;
+        let first_block_l3 = Self::compute_first_block_index(l1_idx, l2_idx, Level::Level3);
         let l3_idx_found = self.search_first_bit_set(TreeType::Tree4kb, first_block_l3);
         assert!(l3_idx_found.is_some());
         let l3_idx = l3_idx_found.unwrap();
@@ -162,7 +151,7 @@ impl BuddyAllocator {
         }
 
         // Second level search
-        let first_block_l2 = TREE_1GB_SIZE + 8 * l1_idx;
+        let first_block_l2 = Self::compute_first_block_index(l1_idx, 0, Level::Level2);
         let l2_idx_found = self.search_first_bit_set(TreeType::Tree2mb, first_block_l2);
         assert!(l2_idx_found.is_some());
         let l2_idx = l2_idx_found.unwrap();
@@ -235,38 +224,26 @@ impl BuddyAllocator {
 
         // Set the 3 levels to free
         let l1_tree_idx = l1_block_idx / 64;
+        let l2_tree_idx =
+            Self::compute_first_block_index(l1_block_idx, 0, Level::Level2) + l2_block_idx / 64;
+        let l3_tree_idx =
+            Self::compute_first_block_index(l1_block_idx, l2_block_idx, Level::Level3)
+                + l3_block_idx / 64;
+
         self.tree_4kb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
-        let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
         self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
-        let l3_tree_idx = TREE_1GB_SIZE
-            + 8 * NB_GB
-            + 512 * 8 * l1_block_idx
-            + 8 * l2_block_idx
-            + l3_block_idx / 64;
         self.tree_4kb[l3_tree_idx] |= 1u64 << (l3_block_idx % 64);
 
-        let mut need_to_free_2mb_level2 = true;
+        // if all 4Kb are free, free upper level for 2Mb
         let first_block_l3 = l3_tree_idx - l3_block_idx / 64;
-        for i in 0..8 {
-            if self.tree_4kb[first_block_l3 + i] != !0u64 {
-                need_to_free_2mb_level2 = false;
-                break;
-            }
-        }
-        if need_to_free_2mb_level2 {
+        if self.all_free(TreeType::Tree4kb, first_block_l3) {
             self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
             self.tree_2mb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
 
-        let mut need_to_free_1gb_level1 = true;
+        // if all 2Mb are free, free 1Gb block
         let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
-        for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != !0u64 {
-                need_to_free_1gb_level1 = false;
-                break;
-            }
-        }
-        if need_to_free_1gb_level1 {
+        if self.all_free(TreeType::Tree2mb, first_block_l2) {
             self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
     }
@@ -293,34 +270,17 @@ impl BuddyAllocator {
         assert!(l3_block_idx == 0); // l3_block_idx must be 0 for 2mb pages
 
         let l1_tree_idx = l1_block_idx / 64;
+        let l2_tree_idx =
+            Self::compute_first_block_index(l1_block_idx, 0, Level::Level2) + l2_block_idx / 64;
+
         self.tree_2mb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
-        let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
         self.tree_2mb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
 
         self.tree_4kb[l2_tree_idx] |= 1u64 << (l2_block_idx % 64);
         self.tree_4kb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
 
-        let mut need_to_free_1gb_level1 = true;
         let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
-        for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != 0u64 {
-                need_to_free_1gb_level1 = false;
-                break;
-            }
-        }
-        if need_to_free_1gb_level1 {
-            self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
-        }
-
-        let mut need_to_free_1gb_level1 = true;
-        let first_block_l2 = l2_tree_idx - l2_block_idx / 64;
-        for i in 0..8 {
-            if self.tree_2mb[first_block_l2 + i] != !0u64 {
-                need_to_free_1gb_level1 = false;
-                break;
-            }
-        }
-        if need_to_free_1gb_level1 {
+        if self.all_free(TreeType::Tree2mb, first_block_l2) {
             self.tree_1gb[l1_tree_idx] |= 1u64 << (l1_block_idx % 64);
         }
     }
@@ -576,6 +536,37 @@ impl BuddyAllocator {
         }
 
         found_index
+    }
+
+    /**
+     * Return false if at least one block of the 512 one is not free
+     */
+    fn all_free(&self, tree_type: TreeType, start_idx: usize) -> bool {
+        let mut all_free = true;
+        for i in 0..8 {
+            if match tree_type {
+                TreeType::Tree4kb => self.tree_4kb[start_idx + i],
+                TreeType::Tree2mb => self.tree_2mb[start_idx + i],
+                TreeType::Tree1gb => self.tree_1gb[start_idx + i],
+            } != !0u64
+            {
+                all_free = false;
+                break;
+            }
+        }
+        all_free
+    }
+
+    /**
+     * Compute index of the first block at a given level given his parents indexes
+     * for level 1 and level 2, l2_idx is ignored
+     */
+    fn compute_first_block_index(l1_idx: usize, l2_idx: usize, level: Level) -> usize {
+        match level {
+            Level::Level1 => l1_idx / 64,
+            Level::Level2 => TREE_1GB_SIZE + 8 * l1_idx,
+            Level::Level3 => TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx,
+        }
     }
 }
 
