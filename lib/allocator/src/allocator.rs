@@ -458,13 +458,12 @@ impl BuddyAllocator {
         l2_block_idx: usize,
         l3_block_idx: usize,
     ) -> bool {
-        let l1_tree_idx = l1_block_idx / 64;
-        let l2_tree_idx = TREE_1GB_SIZE + 8 * l1_block_idx + l2_block_idx / 64;
-        let l3_tree_idx = TREE_1GB_SIZE
-            + 8 * NB_GB
-            + 512 * 8 * l1_block_idx
-            + 8 * l2_block_idx
-            + l3_block_idx / 64;
+        let l1_tree_idx = Self::compute_first_block_index(l1_block_idx, 0, Level::Level1);
+        let l2_tree_idx =
+            Self::compute_first_block_index(l1_block_idx, 0, Level::Level2) + l2_block_idx / 64;
+        let l3_tree_idx =
+            Self::compute_first_block_index(l1_block_idx, l2_block_idx, Level::Level3)
+                + l3_block_idx / 64;
 
         match tree_type {
             TreeType::Tree4kb => match level {
@@ -506,7 +505,7 @@ impl BuddyAllocator {
 
     /**
      * Search for the first bit set in the next 512 bits at a given start index
-     * search from LSB to MSB
+     * search from LSB to MSB except for 1Gb tree
      * return Some(idx) if a bit is set otherwise None
      */
     fn search_first_bit_set(&self, tree_type: TreeType, start_idx: usize) -> Option<usize> {
@@ -527,8 +526,10 @@ impl BuddyAllocator {
                     }
                 }
                 TreeType::Tree1gb => {
-                    if self.tree_1gb[start_idx + i] != 0 {
-                        found_index = Some(Self::bsf(self.tree_1gb[start_idx + i]) + 64 * i);
+                    let rev_i = 7 - i;
+                    if self.tree_1gb[start_idx + rev_i] != 0 {
+                        found_index =
+                            Some(Self::bsr(self.tree_1gb[start_idx + rev_i]) + 64 * rev_i);
                         break;
                     }
                 }
