@@ -67,9 +67,9 @@ fn custom_allocator(lambda: f64) {
 
     let bar = ProgressBar::new(1000);
 
-    for t in 0..1_000_000_000 {
+    for t in 0..2_000_000_000 {
         // stats
-        if t % 1_000_000 == 0 {
+        if t % 2_000_000 == 0 {
             bar.inc(1);
             let (free_1gb, free_2mb, free_4kb) = frame_alloc.stat_free_memory();
             let _ = wtr.write_record(&[
@@ -130,7 +130,7 @@ fn custom_allocator(lambda: f64) {
                         .deallocate_big_page(choose(&mut allocated_2mb_ids, &mut rng).unwrap());
                     free_num_4kb_blocks += 512;
                     allocated_2mb -= 1;
-                    // println!("dellocate 2mb at time {}", t);
+                    //println!("dellocate 2mb at time {}", t);
                 }
             } else {
                 if allocated_1gb > 0 {
@@ -138,7 +138,7 @@ fn custom_allocator(lambda: f64) {
                         .deallocate_huge_page(choose(&mut allocated_1gb_ids, &mut rng).unwrap());
                     free_num_4kb_blocks += 512 * 512;
                     allocated_1gb -= 1;
-                    // println!("deallocate 1gb at time {}", t);
+                    //println!("deallocate 1gb at time {}", t);
                 }
             }
         }
@@ -183,10 +183,11 @@ fn no_internal_fragmentation(lambda: f64, num_gb: u64) {
     let prob_4kb_ber = Bernoulli::from_ratio(262144, 262657).unwrap();
     let prob_2mb_ber = Bernoulli::from_ratio(512, 513).unwrap();
 
-    let mut rng = rand::thread_rng();
-    for t in 0..100_000_000 {
+    //let mut rng = rand::thread_rng();
+    let mut rng = StdRng::seed_from_u64(222);
+    for t in 0..2_000_000_000 {
         // stats
-        if t % 100_000 == 0 {
+        if t % 2_000_000 == 0 {
             let (free_1gb, free_2mb, free_4kb) = stat_free_memory(free_num_4kb_blocks);
             let _ = wtr.write_record(&[
                 t.to_string(),
