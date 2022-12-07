@@ -1,0 +1,9 @@
+- reduire la taille du state Ok
+- taille variable en param
+- clean les algo + pseudo code + doc
+- check rust-analyzer feature to refactor
+- launch test with 512gb OK
+
+- rdtsc (perf measure), need to ignore too big time, and maybe reset cache before ech call
+- instead of quantitative distribution of the different blocks, show spacial distribution
+
