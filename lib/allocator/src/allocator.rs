@@ -4,9 +4,27 @@ use std::arch::asm;
 
 const NB_GB: usize = 512;
 const NB_PAGES: usize = 512 * 512 * NB_GB;
-const TREE_1GB_SIZE: usize = 8;
-const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;
-const TREE_4KB_SIZE: usize = TREE_2MB_SIZE + NB_GB * 512 * 512 / 64;
+// const TREE_1GB_SIZE: usize = 8;
+// const TREE_2MB_SIZE: usize = TREE_1GB_SIZE + NB_GB * 512 / 64;
+// const TREE_4KB_SIZE: usize = TREE_2MB_SIZE + NB_GB * 512 * 512 / 64;
+
+macro_rules! TREE_1GB_SIZE {
+    ($nb_gb: expr) => {
+        8
+    };
+}
+
+macro_rules! TREE_2MB_SIZE {
+    ($nb_gb: expr) => {
+        TREE_1GB_SIZE!($nb_gb) + $nb_gb * 512 / 64
+    };
+}
+
+macro_rules! TREE_4KB_SIZE {
+    ($nb_gb: expr) => {
+        TREE_2MB_SIZE!($nb_gb) + $nb_gb * 512 * 512 / 64
+    };
+}
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum TreeType {
@@ -23,19 +41,19 @@ pub enum Level {
 }
 
 // TODO generic const <const N>
-pub struct BuddyAllocator {
-    tree_4kb: Box<[u64; TREE_4KB_SIZE]>,
-    tree_2mb: Box<[u64; TREE_2MB_SIZE]>,
-    tree_1gb: Box<[u64; TREE_1GB_SIZE]>,
+pub struct BuddyAllocator<const SIZE1: usize, const SIZE2: usize, const SIZE3: usize> {
+    tree_4kb: Box<[u64; SIZE1]>,
+    tree_2mb: Box<[u64; SIZE2]>,
+    tree_1gb: Box<[u64; SIZE3]>,
 }
 
-impl BuddyAllocator {
+impl<const SIZE1: usize, const SIZE2: usize, const SIZE3: usize> BuddyAllocator<SIZE1, SIZE2, SIZE3> {
     pub fn new() -> Self {
         assert!(NB_GB <= 512);
         Self {
-            tree_4kb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_4KB_SIZE]),
-            tree_2mb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_2MB_SIZE]),
-            tree_1gb: Box::new([0xFFFFFFFFFFFFFFFF; TREE_1GB_SIZE]),
+            tree_4kb: Box::new([0xFFFFFFFFFFFFFFFF; SIZE1]),
+            tree_2mb: Box::new([0xFFFFFFFFFFFFFFFF; SIZE2]),
+            tree_1gb: Box::new([0xFFFFFFFFFFFFFFFF; SIZE3]),
         }
     }
 
@@ -520,9 +538,18 @@ impl BuddyAllocator {
                     }
                 }
                 TreeType::Tree2mb => {
-                    if self.tree_2mb[start_idx + i] != 0 {
-                        found_index = Some(Self::bsf(self.tree_2mb[start_idx + i]) + 64 * i);
-                        break;
+                    if i < TREE_1GB_SIZE!(NB_GB) {
+                        if self.tree_2mb[start_idx + i] != 0 {
+                            found_index = Some(Self::bsf(self.tree_2mb[start_idx + i]) + 64 * i);
+                            break;
+                        }
+                    } else {
+                        let rev_i = 7 - i;
+                        if self.tree_2mb[start_idx + rev_i] != 0 {
+                            found_index =
+                                Some(Self::bsr(self.tree_2mb[start_idx + rev_i]) + 64 * rev_i);
+                            break;
+                        }
                     }
                 }
                 TreeType::Tree1gb => {
@@ -565,8 +592,8 @@ impl BuddyAllocator {
     fn compute_first_block_index(l1_idx: usize, l2_idx: usize, level: Level) -> usize {
         match level {
             Level::Level1 => l1_idx / 64,
-            Level::Level2 => TREE_1GB_SIZE + 8 * l1_idx,
-            Level::Level3 => TREE_1GB_SIZE + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx,
+            Level::Level2 => TREE_1GB_SIZE!(NB_GB) + 8 * l1_idx,
+            Level::Level3 => TREE_1GB_SIZE!(NB_GB) + 8 * NB_GB + 512 * 8 * l1_idx + 8 * l2_idx,
         }
     }
 }
