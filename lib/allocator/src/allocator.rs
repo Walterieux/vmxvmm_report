@@ -423,6 +423,66 @@ impl BuddyAllocator {
     }
 
     /**
+     * Return the spatial occupation of blocks with a granularity of 512 blocks
+     *
+     * Returned array contains the following states for each blocks
+     * 0 for FREE
+     * 1 for 4Kb pages
+     * 2 for 2Mb pages
+     * 3 for 1Gb pages
+     */
+    pub fn spatial_stat_memory(&self) -> [u8; NB_GB * 512] {
+        let mut state = [0x00; NB_GB * 512];
+        let mut i = 0;
+
+        while i < NB_PAGES {
+            // 4Kb tree level 3 not free
+            if !self.get_bit_level_index(TreeType::Tree4kb, Level::Level3, i) {
+                state[i / 512] = 1;
+                i += 1;
+                continue;
+            }
+
+            // Not aligned 2Mb
+            if i % 512 != 0 {
+                i += 1;
+                continue;
+            }
+
+            // 2Mb and 4Kb trees level 2 not free
+            if !self.get_bit_level_index(TreeType::Tree2mb, Level::Level2, i)
+                && !self.get_bit_level_index(TreeType::Tree4kb, Level::Level2, i)
+            {
+                state[i / 512] = 2;
+                i += 512;
+
+                continue;
+            }
+
+            // Not aligned 1Gb
+            if i % (512 * 512) != 0 {
+                i += 1;
+                continue;
+            }
+
+            // 1Gb, 2Mb and 4Kb trees level 1 not free
+            if !self.get_bit_level_index(TreeType::Tree1gb, Level::Level1, i)
+                && !self.get_bit_level_index(TreeType::Tree2mb, Level::Level1, i)
+                && !self.get_bit_level_index(TreeType::Tree4kb, Level::Level1, i)
+            {
+                for j in 0..512 {
+                    state[i / 512 + j] = 3;
+                }
+                i += 512 * 512;
+                continue;
+            }
+            i += 1;
+        }
+
+        state
+    }
+
+    /**
      * Check if a bit is set of a given tree at a given level
      * return true if bit equals 1, raise an error if given level does not exist
      */
