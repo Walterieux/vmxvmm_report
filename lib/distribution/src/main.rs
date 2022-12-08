@@ -1,11 +1,12 @@
 use csv::Writer;
+use image::{ImageBuffer, Rgb, RgbImage};
+use indicatif::ProgressBar;
 use rand::distributions::{Bernoulli, Distribution};
 use rand::prelude::IteratorRandom;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
-use indicatif::ProgressBar;
 
 fn main() {
     //save_plot_distribution(70.0);
@@ -38,7 +39,7 @@ fn custom_allocator(lambda: f64) {
 
     let poisson = Poisson::new(lambda).unwrap();
     let mut wtr = Writer::from_path("custom_allocator.csv").unwrap();
-    let _ = wtr.write_record(&[
+    wtr.write_record(&[
         "time",
         "4kb_alloc",
         "2mb_alloc",
@@ -46,7 +47,8 @@ fn custom_allocator(lambda: f64) {
         "1gb_free",
         "2mb_free",
         "4kb_free",
-    ]);
+    ])
+    .unwrap();
 
     let tot_num_4kb_blocks: u64 = num_gb * 512 * 512;
     let mut free_num_4kb_blocks = tot_num_4kb_blocks;
@@ -67,12 +69,21 @@ fn custom_allocator(lambda: f64) {
 
     let bar = ProgressBar::new(1000);
 
-    for t in 0..2_000_000_000 {
+    let number_iterations = 2_000_000_000;
+
+    let imgx = 1000;
+    let imgy = 512;
+    let mut imgbuf = image::ImageBuffer::new(imgx, imgy);
+
+    let mut img_x = 0;
+
+    for t in 0..number_iterations {
         // stats
-        if t % 2_000_000 == 0 {
+        if t % (number_iterations / 1000) == 0 {
             bar.inc(1);
+
             let (free_1gb, free_2mb, free_4kb) = frame_alloc.stat_free_memory();
-            let _ = wtr.write_record(&[
+            wtr.write_record(&[
                 t.to_string(),
                 allocated_4kb.to_string(),
                 (allocated_2mb * 512).to_string(),
@@ -80,7 +91,34 @@ fn custom_allocator(lambda: f64) {
                 (free_1gb * 512 * 512).to_string(),
                 (free_2mb * 512).to_string(),
                 free_4kb.to_string(),
-            ]);
+            ])
+            .unwrap();
+
+            let spatial_stats = frame_alloc.spatial_stat_memory();
+            for idx in (0..spatial_stats.len()).step_by(512) {
+                let mut freq_free = 0;
+                let mut freq_4kb = 0;
+                let mut freq_2mb = 0;
+                let mut freq_1gb = 0;
+
+                for i in 0..512 {
+                    let blk_type = *spatial_stats.get(idx + i).unwrap();
+                    match blk_type {
+                        0 => freq_free += 1,
+                        1 => freq_4kb += 1,
+                        2 => freq_2mb += 1,
+                        3 => freq_1gb += 1,
+                        _ => (),
+                    };
+                }
+
+                let r = (255.0 * (freq_free + freq_2mb + freq_1gb) as f32 / 512.0) as u8;
+                let g = (((255 * freq_free) + (69 * freq_4kb) + (66 * freq_2mb)  + (212 * freq_1gb)) as f32 / 512.0) as u8;
+                let b = (((255 * freq_free) + (134 * freq_4kb) + (14 * freq_2mb)  + (32 * freq_1gb)) as f32 / 512.0) as u8;
+
+                *(imgbuf.get_pixel_mut(img_x, (idx / 512).try_into().unwrap())) = image::Rgb([r, g, b])
+            }
+            img_x += 1;
         }
 
         let mem_occup: u64 = 100 * (tot_num_4kb_blocks - free_num_4kb_blocks) / tot_num_4kb_blocks;
@@ -96,7 +134,7 @@ fn custom_allocator(lambda: f64) {
                     free_num_4kb_blocks -= 1;
                     allocated_4kb += 1;
                 } else {
-                    println!("Not enough memory to allocate a frame!");
+                    // println!("Not enough memory to allocate a frame!");
                 }
             } else if prob_2mb_ber.sample(&mut rng) {
                 let frame = frame_alloc.allocate_big_page();
@@ -105,7 +143,7 @@ fn custom_allocator(lambda: f64) {
                     free_num_4kb_blocks -= 512;
                     allocated_2mb += 1;
                 } else {
-                    println!("Not enough memory to allocate a big page!");
+                    // println!("Not enough memory to allocate a big page!");
                 }
             } else {
                 let frame = frame_alloc.allocate_huge_page();
@@ -114,7 +152,7 @@ fn custom_allocator(lambda: f64) {
                     free_num_4kb_blocks -= 512 * 512;
                     allocated_1gb += 1;
                 } else {
-                    println!("Not enough memory to allocate a huge page!");
+                    // println!("Not enough memory to allocate a huge page!");
                 }
             }
         } else {
@@ -144,9 +182,12 @@ fn custom_allocator(lambda: f64) {
         }
     }
 
+    // Save the image as “fractal.png”, the format is deduced from the path
+    imgbuf.save("output.png").unwrap();
+
     bar.finish();
 
-    let _ = wtr.flush();
+    wtr.flush().unwrap();
 }
 
 /**
