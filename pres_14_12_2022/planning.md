@@ -7,7 +7,7 @@ Here we want to implement an allocator for 4Kb, 2Mb and 1Gb frames.
 ## Presentation of different allocators models
 
 ### Bump Allocator
-Just an image is sufficient
+Just an ilustration image is sufficient
 
 ### Free Linked List Allocator
 Advantage and disadvantage
@@ -20,6 +20,8 @@ Internal Frag but no extern fragmentation.
 
 ## Custom Allocator
 Is a sort of Buddy Allocator with three trees instead of one.
+
+For each tree, it has a 1 (free) if at least one children is free. Memory is shared between trees.
 
 ### How does it works?
 Here's is the video.
