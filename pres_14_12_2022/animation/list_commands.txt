@@ -1,0 +1,12 @@
+Operations order:
+
+24 fps
+
+- Allocate 4Kb Starts: 0 Ends: 72
+- Allocate 4Kb Starts: 192 Ends: 216
+- Allocate 2Mb Starts: 336 Ends: 408
+- Allocate 1Gb Starts: 528 Ends: 576
+
+program ends at 696
+
+Memory is Full!
