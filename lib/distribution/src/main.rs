@@ -3,7 +3,7 @@ use image::{ImageBuffer, Rgb, RgbImage};
 use indicatif::ProgressBar;
 use rand::distributions::{Bernoulli, Distribution};
 use rand::prelude::IteratorRandom;
-use rand::rngs::StdRng;
+use rand::rngs::{StdRng, ThreadRng};
 use rand::SeedableRng;
 use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
@@ -18,7 +18,6 @@ fn main() {
  * Utilitary function to pop a random element from a given Vec
  * To maximize performance, order is not kept
  */
-
 fn choose(raw: &mut Vec<usize>, rnd: &mut StdRng) -> Option<usize> {
     let i = (0..raw.len()).choose(rnd)?;
     Some(raw.swap_remove(i))
