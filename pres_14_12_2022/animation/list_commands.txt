@@ -8,13 +8,29 @@ Operations order:
 	- 72 1Gb Level1_0 -> 10
 - Allocate 4Kb Starts: 192 Ends: 216
 	- 192 4Kb Level3_3 -> 00
+	- 216 4Kb Level2_1 -> 10
 - Allocate 2Mb Starts: 336 Ends: 408
 	- 336 2Mb Level2_1 -> 00
 	- 360 2Mb level1_0 -> 10
 	- 384 4Kb Level2_1 -> 00
+	- 408 4Kb Level1_0 -> 10
 - Allocate 1Gb Starts: 528 Ends: 576
 	- 528 1Gb Level1_0 -> 00
 	- 552 2Mb Level1_0 -> 00
+	- 576 4Kb Level1_0 -> 00
+	
+- Deallocate 4Kb starts: 696 Ends: 744
+	- 696 4Kb Level3_3 -> 01
+	- 720 4Kb Level2_1 -> 01
+	- 744 4Kb Level1_0 -> 01
+- Deallocate 4Kb starts: 864 Ends 912:
+	- 864 4Kb Level3_3 -> 11
+	- 888 2Mb Level2_1 -> 01
+	- 912 2Mb Level1_0 -> 01
+- Deallocate 2Mb starts: 1032 Ends: 1080
+	- 1032 2Mb Level2_1 -> 11
+	- 1056 4Kb Level2_1 -> 11
+	- 1080 1Gb Level1_0 -> 01
 
 program ends at 696
 
