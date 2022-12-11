@@ -3,9 +3,18 @@ Operations order:
 24 fps
 
 - Allocate 4Kb Starts: 0 Ends: 72
+	- 24 4Kb Level3_3 -> 10
+	- 48 2Mb Level2_1 -> 10
+	- 72 1Gb Level1_0 -> 10
 - Allocate 4Kb Starts: 192 Ends: 216
+	- 192 4Kb Level3_3 -> 00
 - Allocate 2Mb Starts: 336 Ends: 408
+	- 336 2Mb Level2_1 -> 00
+	- 360 2Mb level1_0 -> 10
+	- 384 4Kb Level2_1 -> 00
 - Allocate 1Gb Starts: 528 Ends: 576
+	- 528 1Gb Level1_0 -> 00
+	- 552 2Mb Level1_0 -> 00
 
 program ends at 696
 
