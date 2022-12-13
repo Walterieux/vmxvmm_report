@@ -31,7 +31,11 @@ Operations order:
 	- 1032 2Mb Level2_1 -> 11
 	- 1056 4Kb Level2_1 -> 11
 	- 1080 1Gb Level1_0 -> 01
+- Deallocate 1Gb starts: 1200 Ends: 1248
+	- 1200 1Gb Level1_0 -> 11
+	- 1224 2Mb Level1_0 -> 11
+	- 1248 4Kb Level1_0 -> 11
 
-program ends at 696
+program ends at 1248
 
 Memory is Full!
