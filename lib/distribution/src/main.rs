@@ -7,6 +7,7 @@ use rand::rngs::{StdRng, ThreadRng};
 use rand::SeedableRng;
 use statrs::distribution::DiscreteCDF;
 use statrs::distribution::Poisson;
+use std::time::{Duration, Instant};
 
 fn main() {
     //save_plot_distribution(70.0);
@@ -76,6 +77,8 @@ fn custom_allocator(lambda: f64) {
 
     let mut img_x = 0;
 
+    let mut tot_time: u128 = 0;
+
     for t in 0..number_iterations {
         // stats
         if t % (number_iterations / 1000) == 0 {
@@ -112,10 +115,15 @@ fn custom_allocator(lambda: f64) {
                 }
 
                 let r = (255.0 * (freq_free + freq_2mb + freq_1gb) as f32 / 512.0) as u8;
-                let g = (((255 * freq_free) + (69 * freq_4kb) + (66 * freq_2mb)  + (212 * freq_1gb)) as f32 / 512.0) as u8;
-                let b = (((255 * freq_free) + (134 * freq_4kb) + (14 * freq_2mb)  + (32 * freq_1gb)) as f32 / 512.0) as u8;
+                let g = (((255 * freq_free) + (69 * freq_4kb) + (66 * freq_2mb) + (212 * freq_1gb))
+                    as f32
+                    / 512.0) as u8;
+                let b = (((255 * freq_free) + (134 * freq_4kb) + (14 * freq_2mb) + (32 * freq_1gb))
+                    as f32
+                    / 512.0) as u8;
 
-                *(imgbuf.get_pixel_mut(img_x, (idx / 512).try_into().unwrap())) = image::Rgb([r, g, b])
+                *(imgbuf.get_pixel_mut(img_x, (idx / 512).try_into().unwrap())) =
+                    image::Rgb([r, g, b])
             }
             img_x += 1;
         }
@@ -127,7 +135,9 @@ fn custom_allocator(lambda: f64) {
         let is_allocation = d.sample(&mut rng);
         if is_allocation {
             if prob_4kb_ber.sample(&mut rng) {
+                let start = Instant::now();
                 let frame = frame_alloc.allocate_frame();
+                tot_time += start.elapsed().as_nanos();
                 if frame.is_some() {
                     allocated_4kb_ids.push(frame.unwrap());
                     free_num_4kb_blocks -= 1;
@@ -136,7 +146,9 @@ fn custom_allocator(lambda: f64) {
                     // println!("Not enough memory to allocate a frame!");
                 }
             } else if prob_2mb_ber.sample(&mut rng) {
+                let start = Instant::now();
                 let frame = frame_alloc.allocate_big_page();
+                tot_time += start.elapsed().as_nanos();
                 if frame.is_some() {
                     allocated_2mb_ids.push(frame.unwrap());
                     free_num_4kb_blocks -= 512;
@@ -145,7 +157,9 @@ fn custom_allocator(lambda: f64) {
                     // println!("Not enough memory to allocate a big page!");
                 }
             } else {
+                let start = Instant::now();
                 let frame = frame_alloc.allocate_huge_page();
+                tot_time += start.elapsed().as_nanos();
                 if frame.is_some() {
                     allocated_1gb_ids.push(frame.unwrap());
                     free_num_4kb_blocks -= 512 * 512;
@@ -157,22 +171,28 @@ fn custom_allocator(lambda: f64) {
         } else {
             if prob_4kb_ber.sample(&mut rng) {
                 if allocated_4kb > 0 {
+                    let start = Instant::now();
                     frame_alloc.deallocate_frame(choose(&mut allocated_4kb_ids, &mut rng).unwrap());
+                    tot_time += start.elapsed().as_nanos();
                     free_num_4kb_blocks += 1;
                     allocated_4kb -= 1;
                 }
             } else if prob_2mb_ber.sample(&mut rng) {
                 if allocated_2mb > 0 {
+                    let start = Instant::now();
                     frame_alloc
                         .deallocate_big_page(choose(&mut allocated_2mb_ids, &mut rng).unwrap());
+                    tot_time += start.elapsed().as_nanos();
                     free_num_4kb_blocks += 512;
                     allocated_2mb -= 1;
                     //println!("dellocate 2mb at time {}", t);
                 }
             } else {
                 if allocated_1gb > 0 {
+                    let start = Instant::now();
                     frame_alloc
                         .deallocate_huge_page(choose(&mut allocated_1gb_ids, &mut rng).unwrap());
+                    tot_time += start.elapsed().as_nanos();
                     free_num_4kb_blocks += 512 * 512;
                     allocated_1gb -= 1;
                     //println!("deallocate 1gb at time {}", t);
@@ -185,6 +205,8 @@ fn custom_allocator(lambda: f64) {
     imgbuf.save("output.png").unwrap();
 
     bar.finish();
+
+    println!("time taken in nano: {}", tot_time);
 
     wtr.flush().unwrap();
 }

@@ -5,12 +5,13 @@ fn main() {
     let mut frame_alloc = Box::new(BuddyAllocator::new());
     println!("Allocator instanciated!");
 
-    const NB_GB: usize = 8;
+    const NB_GB: usize = 512;
     const NB_PAGES: usize = 512 * 512 * NB_GB;
 
     let mut cnt = 0;
 
-    for _ in 0..1000 {
+    for s in 0..1000 {
+        println!("step: {}", s);
         // allocates all possible frames
         for _ in 0..NB_PAGES {
             let frame = frame_alloc.allocate_frame();

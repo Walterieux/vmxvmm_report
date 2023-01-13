@@ -33,7 +33,7 @@ fn find_first_one(input: u64) -> u32 {
         }
         temp >>= 1;
     }
-    return 0;
+    return 64;
 }
 
 #[inline(always)]
@@ -42,52 +42,89 @@ fn trailing_zeros(input: u64) -> u32 {
 }
 
 fn main() {
-    let mut x = 0x0000000000000001u64;
+    //let mut x = 0x0000000000000001u64;
+    let mut x_arr: [u64; 8] = [0, 0, 0, 0, 0, 0, 0, 1];
+    let mut array_idx_set = 0;
 
     let mut wtr = Writer::from_path("foo.csv").unwrap();
     let _ = wtr.write_record(&["iter", "bsf", "loop", "tralling"]);
 
-    for i in 0..64 {
+    for i in 0..512 {
         print!("\nBit {} set:\n", i);
-        let start1 = Instant::now();
+        let mut elapsed_time1 = 0;
+
         let n = test::black_box(1000);
         let mut ctr = 0;
         for i in 0..n {
-            let input = test::black_box(x);
-            ctr += bsf(input);
+            for j in 0..8 {
+                let input = test::black_box(x_arr[j]);
+                let start1 = Instant::now();
+                if input == 0 {
+                    continue;
+                }
+                let idx = bsf(input);
+                elapsed_time1 += start1.elapsed().as_nanos();
+                ctr += idx;
+                break;
+            }
+            
         }
-        let elapsed_time1 = start1.elapsed();
         println!("Running bsf() took {:?}. sum = {}", elapsed_time1, ctr);
         ctr = 0;
 
-        let start2 = Instant::now();
+        let mut elapsed_time2 = 0;
         let n = test::black_box(1000);
-        let mut ctr = 0;
         for i in 0..n {
-            let input = test::black_box(x);
-            ctr += find_first_one(input);
+            for j in 0..8 {
+                let input = test::black_box(x_arr[j]);
+                let start2 = Instant::now();
+                let idx = find_first_one(input);
+                elapsed_time2 += start2.elapsed().as_nanos();
+                if idx != 64 {
+                    ctr += idx;
+                    break;
+                }
+            }
         }
-        let elapsed_time2 = start2.elapsed();
+        
         println!("Running find_first_one() took {:?}. sum = {}", elapsed_time2, ctr);
         ctr = 0;
-
-        let start3 = Instant::now();
+        let mut elapsed_time3 = 0;
+        
         let n = test::black_box(1000);
-        let mut ctr = 0;
         for i in 0..n {
-            let input = test::black_box(x);
-            ctr += trailing_zeros(input);
+            for j in 0..8 {
+                let input = test::black_box(x_arr[j]);
+                let start3 = Instant::now();
+                if input == 0 {
+                    continue;
+                }
+                let idx = trailing_zeros(input);
+                elapsed_time3 += start3.elapsed().as_nanos();
+
+                ctr += idx;
+                break;
+            }
         }
-        let elapsed_time3 = start3.elapsed();
+        
         println!("Running trailing_zeros() took {:?}. sum = {}", elapsed_time3, ctr);
         ctr = 0;
-        x <<= 1;
+        x_arr[array_idx_set] <<= 1;
+        if (i+1)%64 == 0 && i != 511{
+            for j in 0..8 {
+                x_arr[j] = 0;
+            }
+            array_idx_set += 1;
+            x_arr[array_idx_set] = 1;
+            
+        }
+        println!("{:?}\n", x_arr);
 
         let _ = wtr.write_record(&[
             i.to_string(),
-            elapsed_time1.as_nanos().to_string(),
-            elapsed_time2.as_nanos().to_string(),
-            elapsed_time3.as_nanos().to_string(),
+            elapsed_time1.to_string(),
+            elapsed_time2.to_string(),
+            elapsed_time3.to_string(),
         ]);
     }
     let _ = wtr.flush();
