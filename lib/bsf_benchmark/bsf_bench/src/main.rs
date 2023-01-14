@@ -42,7 +42,6 @@ fn trailing_zeros(input: u64) -> u32 {
 }
 
 fn main() {
-    //let mut x = 0x0000000000000001u64;
     let mut x_arr: [u64; 8] = [0, 0, 0, 0, 0, 0, 0, 1];
     let mut array_idx_set = 0;
 

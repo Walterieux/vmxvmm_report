@@ -1,4 +1,4 @@
-//! Revisited buddy allocator
+//! Custom buddy allocator to allocate Intel x86-64 page tables (4Kb, 2Mb and 1Gb)
 
 use std::arch::asm;
 
@@ -22,7 +22,6 @@ pub enum Level {
     Level3,
 }
 
-// TODO generic const <const N>
 pub struct BuddyAllocator {
     tree_4kb: Box<[u64; TREE_4KB_SIZE]>,
     tree_2mb: Box<[u64; TREE_2MB_SIZE]>,
@@ -41,6 +40,7 @@ impl BuddyAllocator {
 
     /**
      * Bit Scan Forward
+     * taken from https://docs.oracle.com/cd/E19455-01/806-3773/instructionset-89/index.html
      */
     fn bsf(input: u64) -> usize {
         assert!(input > 0);
@@ -59,6 +59,7 @@ impl BuddyAllocator {
 
     /**
      * Bit Scan Reverse
+     * taken from https://docs.oracle.com/cd/E19620-01/805-4693/instructionset-90/index.html
      */
     #[allow(dead_code)]
     fn bsr(input: u64) -> usize {
