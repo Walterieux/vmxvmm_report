@@ -12,7 +12,6 @@ use test::*;
 #[inline(always)]
 fn bsf(input: u64) -> u32 {
     let mut pos: u32;
-    // "bsf %1, %0" : "=r" (pos) : "rm" (input),
     unsafe {
         asm! {
             "bsf {pos}, {input}",
@@ -42,7 +41,7 @@ fn trailing_zeros(input: u64) -> u32 {
 }
 
 fn main() {
-    let mut x_arr: [u64; 8] = [0, 0, 0, 0, 0, 0, 0, 1];
+    let mut x_arr: [u64; 8] = [1, 0, 0, 0, 0, 0, 0, 0];
     let mut array_idx_set = 0;
 
     let mut wtr = Writer::from_path("foo.csv").unwrap();
@@ -59,6 +58,7 @@ fn main() {
                 let input = test::black_box(x_arr[j]);
                 let start1 = Instant::now();
                 if input == 0 {
+                    ctr += 64;
                     continue;
                 }
                 let idx = bsf(input);
@@ -66,7 +66,6 @@ fn main() {
                 ctr += idx;
                 break;
             }
-            
         }
         println!("Running bsf() took {:?}. sum = {}", elapsed_time1, ctr);
         ctr = 0;
@@ -83,19 +82,24 @@ fn main() {
                     ctr += idx;
                     break;
                 }
+                ctr += 64;
             }
         }
-        
-        println!("Running find_first_one() took {:?}. sum = {}", elapsed_time2, ctr);
+
+        println!(
+            "Running find_first_one() took {:?}. sum = {}",
+            elapsed_time2, ctr
+        );
         ctr = 0;
         let mut elapsed_time3 = 0;
-        
+
         let n = test::black_box(1000);
         for i in 0..n {
             for j in 0..8 {
                 let input = test::black_box(x_arr[j]);
                 let start3 = Instant::now();
                 if input == 0 {
+                    ctr += 64;
                     continue;
                 }
                 let idx = trailing_zeros(input);
@@ -105,26 +109,30 @@ fn main() {
                 break;
             }
         }
-        
-        println!("Running trailing_zeros() took {:?}. sum = {}", elapsed_time3, ctr);
+
+        println!(
+            "Running trailing_zeros() took {:?}. sum = {}",
+            elapsed_time3, ctr
+        );
         ctr = 0;
         x_arr[array_idx_set] <<= 1;
-        if (i+1)%64 == 0 && i != 511{
+        if (i + 1) % 64 == 0 && i != 511 {
             for j in 0..8 {
                 x_arr[j] = 0;
             }
             array_idx_set += 1;
             x_arr[array_idx_set] = 1;
-            
         }
         println!("{:?}\n", x_arr);
 
-        let _ = wtr.write_record(&[
-            i.to_string(),
-            elapsed_time1.to_string(),
-            elapsed_time2.to_string(),
-            elapsed_time3.to_string(),
-        ]);
+        if i % 3 == 0 {
+            let _ = wtr.write_record(&[
+                i.to_string(),
+                elapsed_time1.to_string(),
+                elapsed_time2.to_string(),
+                elapsed_time3.to_string(),
+            ]);
+        }
     }
     let _ = wtr.flush();
 }
